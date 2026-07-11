@@ -1,0 +1,13 @@
+/feedbuilder
+/openwrt-feed-builder
+/output
+/output.building
+/output.old
+/.cache
+/releases
+/releases.building
+/releases.old
+/keys
+config.yaml
+deploy.conf
+.idea/

@@ -1,0 +1,205 @@
+# openwrt-feed-builder example configuration
+#
+# Builds an opkg custom feed (OpenWrt 24.10 / opkg layout) from several HTTP
+# sources. The output tree mirrors downloads.openwrt.org/releases/ (see the
+# layout section below); every feed directory gets its own Packages /
+# Packages.gz (and Packages.sig when signing is enabled).
+
+output_dir: ./releases        # generated feed goes here (recreated on every build)
+cache_dir: ./.cache         # raw downloads are cached here between runs
+
+# Public URL where the feed will be served. Embedded into the generated
+# per-release add.sh so the one-line router installer points at the right host.
+base_url: ""                # e.g. https://openwrt.example.com/packages
+
+# opkg feed-name prefix used in the generated add.sh and the src/gz lines,
+# e.g. "custom" -> "custom_mipsel_24kc". Defaults to "custom".
+feed_prefix: custom
+
+# Optional: only keep packages for these architectures (plus 'all').
+# Leave empty to keep every architecture encountered.
+architectures: ["aarch64_cortex-a53","mipsel_24kc"]
+# architectures: ["x86_64", "aarch64_cortex-a53"]
+
+# Optional: only keep packages for these targets/subtargets. Applies to the
+# target/subtarget detected from the asset file name (kmod-* and other
+# SoC-specific packages). Architecture-generic packages (luci-app-*, *_all,
+# anything with no detectable target) are always kept.
+# An entry may be a full "target/subtarget", a lone subtarget, or a lone target
+# family — any matches:
+#   ramips/mt7621   -> only that subtarget
+#   mt7621          -> subtarget regardless of target name
+#   mediatek        -> every subtarget under the mediatek target
+# Leave empty (default) to keep every target.
+targets: ["ramips/mt7621", "mediatek/filogic"]
+
+# Output layout — mirrors downloads.openwrt.org/releases/:
+#   packages-<branch>/<arch>/<feed>/            (userspace from
+#                                          release-independent sources;
+#                                             Architecture:all packages are
+#                                             duplicated into every arch —
+#                                             there is no all/ directory)
+#   <release>/targets/<target>/<subtarget>/kmods/<kernel>/
+#     -> kmods, keyed by the exact kernel from their
+#        'Depends: kernel (= ...)' (e.g. 6.6.141-1-<hash>)
+#   <release>/targets/<target>/<subtarget>/packages/
+#     -> userspace from release-bound sources (a source with a
+#        matching release tag or its own kmod_version) and kmods
+#        without a kernel dep — like the official target dirs.
+#        Third-party builds differ between point releases while
+#        keeping the same file name, so they cannot share one dir;
+#        release-bound packages with no detectable target fall back
+#        to packages-<branch>/ (may collide there, kept first).
+layout:
+  # Point releases the feed carries — one or a list, each 3-part and all on one
+  # branch. Required. Release tags on sources are only used for routing when
+  # they match one of these.
+  version: ["24.10.6", "24.10.7"]
+  default_feed: packages
+  # kmod_version: "24.10.7" # fallback release for kmods from sources without a
+                            # release tag (default: newest of the version list)
+  #
+  # The target/subtarget is read from the asset file name
+  # (<pkg>_<ver>_<arch>_<target>_<subtarget>); a per-source
+  # `target: mediatek/mt7622` overrides detection for that source.
+  #
+  # The point release can also be set per source, so one build can carry
+  # packages for several releases side by side:
+  #   - a github source's release tag is used automatically when it matches one
+  #     of the layout.version entries (tag v24.10.7 -> 24.10.7);
+  #   - `kmod_version: "24.10.7"` on any source sets it explicitly.
+  # One installer script is generated per listed release (<release>/add.sh),
+  # each pinned to its release; run the one matching the router.
+
+sign:
+  enabled: false            # set true after running:  openwrt-feed-builder genkey
+  secret_key: ./keys/secret.key
+  public_key: ./keys/public.key
+  # Instead of a secret_key file, the key can come from a command (its stdout
+  # is the key). Handy with a password manager; the key is written to a private
+  # temp file only for the duration of the build. Set EITHER this OR secret_key.
+  #   secret_key_cmd: "pass show openwrt/feed-secret-key"
+
+serve:
+  host: 0.0.0.0
+  port: 8080
+
+sources:
+  # Each source is best-effort: if one fails (404, timeout, rate limit, bad
+  # config) it is skipped with a warning and the build continues with the rest.
+  # Set `enabled: false` on any source to skip it without deleting it.
+  # The placeholder examples below use fake hosts, so they are disabled; the two
+  # real ones (the OpenWrt luci feed and the gSpotx2f GitHub directory) are on.
+
+  # 1) Explicit .ipk URLs.
+  #    A URL may contain a wildcard in the file name: the directory is listed
+  #    and only the LATEST version of each matching package is downloaded
+  #    (requires the server to expose an HTML directory listing / autoindex).
+  - type: ipk
+    name: direct-urls
+    enabled: false
+    urls:
+      - https://example.com/packages/bar_*_all.ipk        # -> newest bar_<ver>_all.ipk
+      - https://example.com/packages/foo_1.0-1_x86_64.ipk  # exact URL, no wildcard
+
+  # 2) Mirror selected packages from an existing opkg feed (parses Packages.gz).
+  - type: feed
+    name: upstream-luci
+    enabled: false
+    url: https://downloads.openwrt.org/releases/24.10.0/packages/x86_64/luci
+    include: ["luci-app-*"]   # glob match on the Package name
+    exclude: ["luci-app-*-i18n-*"]
+
+  # 3) .ipk assets attached to a GitHub release (set GITHUB_TOKEN to avoid rate limits).
+  - type: github
+    name: someproject
+    enabled: false
+    repo: owner/project
+    tag: latest               # or a specific tag like "v1.4.2"
+    asset_match: "*_x86_64.ipk"
+    # tags: [v24.10.6, v24.10.7]  # pull SEVERAL releases in one pass (overrides `tag`);
+    #                             # release-looking tags also set the kmod dir per release
+    # kmod_version: "24.10.7"     # explicit kmod point release for this source
+
+  # 4) Scrape an HTML directory listing / autoindex page for .ipk links.
+  - type: html
+    name: autoindex
+    enabled: false
+    url: https://example.com/myrepo/
+    pattern: "*.ipk"
+
+  # 5) Whole directory inside a GitHub repo (via the GitHub Contents API).
+  #    Paste a tree URL (optionally ending in a glob) ...
+  - type: github_dir
+    name: gspotx2f-2410
+    url: https://github.com/gSpotx2f/packages-openwrt/tree/master/24.10/*.ipk
+    #feed: grinderz     # override the feed directory name for this source
+
+  # 6) GitHub releases whose assets embed the target/subtarget in the file name
+  #    (<pkg>_<ver>_<arch>_<target>_<subtarget>.ipk); the target/subtarget is
+  #    detected automatically and used in the output path.
+  - type: github
+    name: awg-openwrt
+    enabled: true
+    repo: Slava-Shchipunov/awg-openwrt
+    tag: v24.10.7               # single tag; or use `tags: [v24.10.6, v24.10.7]`
+    asset_match: "*.ipk"
+    #feed: grinderz
+
+  - type: github
+    name: ssclash
+    enabled: true
+    repo: zerolabnet/SSClash
+    tag: latest
+    asset_match: "*.ipk"
+  #    ... or use explicit github_dir fields:
+  # - type: github_dir
+  #   repo: gSpotx2f/packages-openwrt
+  #   path: "24.10"
+  #   ref: master
+  #   pattern: "*.ipk"
+  #   recursive: false
+  #   # tip: set GITHUB_TOKEN in the environment to avoid the 60 req/h limit
+
+  # 7) Raw binary / archive repacked into a locally built .ipk — for upstreams
+  #    that ship plain binaries instead of packages. One .ipk is built per
+  #    arch_map entry (opkg architecture -> token used in the URL), each
+  #    installing the unpacked file at `install` with `mode`. Placeholders in
+  #    url / asset_match / extract / install: {version} {tag} {arch} {pkg_arch}.
+  #    Example: the mihomo binary SSClash expects at /opt/clash/bin/clash.
+  - type: binary
+    name: ssclash-mihomo
+    enabled: false
+    repo: MetaCubeX/mihomo    # optional: resolve the version from a release tag
+    tag: latest               # or a fixed tag like "v1.19.28"
+    # version: "1.19.28"      # ... or set the version explicitly (repo not needed)
+    url: https://github.com/MetaCubeX/mihomo/releases/download/{tag}/mihomo-linux-{arch}-{tag}.gz
+    # asset_match: "mihomo-linux-{arch}-*.gz"  # alternative to url: glob over
+    #                                          # the release assets (needs repo)
+    install: /opt/clash/bin/clash
+    mode: "0755"              # quote it — an octal string; default 0755
+    arch_map:
+      mipsel_24kc: mipsle-softfloat
+      aarch64_cortex-a53: arm64
+      x86_64: amd64-compatible
+    # arch: all               # instead of arch_map, for arch-independent files
+    section: net              # optional control fields below
+    description: mihomo (clash.meta) binary for SSClash
+    # revision: "1"           # package version becomes <version>-<revision>
+    # depends: [kmod-tun]
+    # provides: [clash]
+    # conflicts: []
+    # maintainer: you@example.com
+    # control: {License: GPL-3.0}   # extra verbatim control fields
+    # extract: "*/mihomo"     # member glob for .tar[.gz/.xz]/.tgz/.txz/.zip
+    #                         # assets (single-file archives unpack implicitly;
+    #                         # bare .gz/.xz are just decompressed)
+    # upx: true               # UPX-compress the binary before packaging to cut
+    #                         # Installed-Size (needs upx on the build host;
+    #                         # string value = custom flags, default
+    #                         # "--best --lzma"; runtime RAM grows by roughly
+    #                         # the uncompressed size)
+    # postinst: |             # optional maintainer scripts
+    #   #!/bin/sh
+    #   exit 0
+    # feed: clash             # feed dir override, same as other sources
