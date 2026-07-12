@@ -8,6 +8,18 @@ SHELL := bash
 # instead of editing this Makefile; CLI variables still win over it
 -include local.mk
 
+FEEDBUILDER := go run ./cmd/openwrt-feed-builder
+
+# fail with a local.mk hint when a destination variable is empty
+# $(1): variable name, $(2): example value
+define Check/Dest
+	@if [ -z "$($(1))" ]; then
+		echo " - $(1) not set, add to local.mk:"
+		echo "   $(1) := $(2)"
+		exit 1
+	fi
+endef
+
 
 ##@ General
 
@@ -32,6 +44,37 @@ test: ## Run tests
 	go test ./...
 
 
+##@ Feed Targets
+
+
+# config the feed commands run with (override per invocation or in local.mk)
+FEED_CONFIG ?= config.yaml
+# extra `build` flags: make feed FEED_ARGS="--full --sign --only sdk"
+FEED_ARGS ?=
+
+.PHONY: feed
+feed: ## Build the feed (incremental, unsigned; flags via FEED_ARGS)
+	$(FEEDBUILDER) -c $(FEED_CONFIG) build $(FEED_ARGS)
+
+.PHONY: sign
+sign: ## Sign the feed tree in place (Packages.sig + repo.pub + add.sh)
+	$(FEEDBUILDER) -c $(FEED_CONFIG) sign
+
+# verifies exactly the tree publish ships ($(PUBLISH_SRC)), not the config's
+# output_dir — the two may diverge
+.PHONY: verify
+verify: ## Validate every feed signature + repo.pub + add.sh key step
+	$(FEEDBUILDER) -c $(FEED_CONFIG) verify "$(PUBLISH_SRC)"
+
+.PHONY: serve
+serve: ## Serve the feed over HTTP (config `serve` section)
+	$(FEEDBUILDER) -c $(FEED_CONFIG) serve
+
+.PHONY: genkey
+genkey: ## Generate a usign keypair into keys/
+	$(FEEDBUILDER) genkey
+
+
 ##@ Deploy Targets
 
 
@@ -40,29 +83,23 @@ DEPLOY_DEST ?=
 # never sent to the host; under --delete (without --delete-excluded) these
 # are also left alone on the receiver
 # leading / anchors a pattern to the repo root (bare names match anywhere)
-# keys/ (the usign secret key) DOES sync: the build host builds and signs the
-# feed, the laptop only fetches the result — keep DEPLOY_DEST private
+# keys/ (the usign secret key) never leaves this machine: the build host
+# builds an UNSIGNED tree, `make fetch` pulls it here and `sign` signs it
 DEPLOY_EXCLUDES := .git .claude .idea .DS_Store /openwrt-feed-builder /feedbuilder \
-	/.cache /releases '/releases.*' /output '/output.*' \
+	/.cache /releases '/releases.*' /output '/output.*' /keys \
 	'sdk-test-*' '*.log'
 # host-only state that must survive even an exclude-list mistake: rsync 'P'
 # filters forbid deletion regardless of --delete and exclude typos.
-# local.mk, config.yaml and keys are deliberately NOT here: the laptop copies
-# are the source of truth and overwrite the host ones on deploy
-DEPLOY_PROTECT := .cache releases
+# local.mk and config.yaml are deliberately NOT here: the laptop copies are
+# the source of truth and overwrite the host ones on deploy
+DEPLOY_PROTECT := .cache releases keys
 
 DEPLOY_RSYNC = rsync -av --delete \
 	$(foreach e,$(DEPLOY_EXCLUDES),--exclude=$(e)) \
 	$(foreach p,$(DEPLOY_PROTECT),--filter='P /$(p)') \
 	./ "$(DEPLOY_DEST)/"
 
-define Deploy/Check
-	@if [ -z "$(DEPLOY_DEST)" ]; then
-		echo " - DEPLOY_DEST not set, add to local.mk:"
-		echo "   DEPLOY_DEST := user@buildhost:/home/user/src/openwrt-feed-builder"
-		exit 1
-	fi
-endef
+Deploy/Check = $(call Check/Dest,DEPLOY_DEST,user@buildhost:/home/user/src/openwrt-feed-builder)
 
 .PHONY: deploy.diff
 deploy.diff: ## Preview deploy (rsync dry-run: what gets sent/deleted)
@@ -88,11 +125,7 @@ PUBLISH_SRC ?= releases
 PUBLISH_RSYNC = rsync -aP --delete "$(PUBLISH_SRC)" "$(PUBLISH_DEST)"
 
 define Publish/Check
-	@if [ -z "$(PUBLISH_DEST)" ]; then
-		echo " - PUBLISH_DEST not set, add to local.mk:"
-		echo "   PUBLISH_DEST := webserver:/var/www/openwrt/"
-		exit 1
-	fi
+	$(call Check/Dest,PUBLISH_DEST,webserver:/var/www/openwrt/)
 	if [ ! -d "$(PUBLISH_SRC)" ]; then
 		echo " - source directory '$(PUBLISH_SRC)' not found — run the build first"
 		exit 1
@@ -105,7 +138,7 @@ publish.diff: ## Preview feed publish (rsync dry-run)
 	$(PUBLISH_RSYNC) --dry-run
 
 .PHONY: publish
-publish: ## Publish the generated feed to PUBLISH_DEST (web server)
+publish: verify ## Publish the generated feed to PUBLISH_DEST (web server; refuses unsigned/broken signatures)
 	$(call Publish/Check)
 	$(PUBLISH_RSYNC)
 

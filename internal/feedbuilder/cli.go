@@ -243,7 +243,7 @@ func sourceRelease(layout Layout, src Source, resolvedTag, name string) string {
 	return ""
 }
 
-func cmdBuild(cfg *Config, refresh, full bool, only []string) int {
+func cmdBuild(cfg *Config, refresh, full, sign bool, only []string) int {
 	client := newClient()
 	cache, err := newCache(cfg.CacheDir, client, refresh)
 	if err != nil {
@@ -508,8 +508,14 @@ func cmdBuild(cfg *Config, refresh, full bool, only []string) int {
 		"%d older version(s) dropped, %d feed dir(s) touched\n",
 		routed, unchanged, skipped, superseded, len(leafDirs))
 
-	// 4. Build (and optionally sign) the index in each leaf dir.
-	doSign := cfg.Sign.Enabled
+	// 4. Build the index in each touched leaf dir. Signing is opt-in
+	//    (--sign); without it run the `sign` command afterwards — it signs
+	//    every index and bakes the key into repo.pub / add.sh.
+	doSign := sign && cfg.Sign.Enabled
+	if sign && !cfg.Sign.Enabled {
+		fmt.Fprintln(os.Stderr, "warning: --sign but sign.enabled is false in the config; "+
+			"writing unsigned feed")
+	}
 	if doSign && !usignAvailable() {
 		fmt.Fprintln(os.Stderr, "warning: usign not found on PATH; writing unsigned feed")
 		doSign = false
@@ -576,6 +582,11 @@ func cmdBuild(cfg *Config, refresh, full bool, only []string) int {
 			} else {
 				line += " [signed]"
 			}
+		} else {
+			// the index just changed, so a signature from a previous signed
+			// run no longer matches — a stale .sig is worse than none (opkg
+			// errors out instead of taking the unsigned-feed path)
+			os.Remove(filepath.Join(leaf, "Packages.sig"))
 		}
 		fmt.Println(line)
 	}
@@ -903,10 +914,210 @@ func printRouterHelp(cfg *Config, relPaths []string, feedArches map[string]map[s
 			fmt.Println("  (run 'genkey' or check the public key; the filename must be the key id)")
 		}
 	} else {
-		fmt.Println("\nThe feed is unsigned. Either sign it (recommended) or, on the router,")
-		fmt.Println("comment out 'option check_signature 1' in /etc/opkg.conf.")
+		fmt.Println("\nThe feed is unsigned. Sign it with the `sign` command (or build --sign);")
+		fmt.Println("otherwise, on the router, comment out 'option check_signature 1' in /etc/opkg.conf.")
 	}
 	fmt.Println("\nThen: opkg update && opkg install <package>")
+}
+
+// cmdSign signs an existing feed tree in place: every Packages index gets a
+// fresh Packages.sig, and the repo helpers (repo.pub, per-release add.sh) are
+// regenerated with the key baked in. Lets an unsigned build (e.g. produced on
+// a build host that has no keys) be signed afterwards, or a feed re-signed
+// after a key rotation — without rebuilding anything.
+func cmdSign(cfg *Config) int {
+	if !cfg.Sign.Enabled {
+		fmt.Fprintln(os.Stderr, "error: sign.enabled is false in the config")
+		return 1
+	}
+	if !usignAvailable() {
+		fmt.Fprintln(os.Stderr, "error: usign not found on PATH")
+		return 1
+	}
+	secretKey := cfg.Sign.SecretKey
+	if cfg.Sign.SecretKeyCmd != "" {
+		path, cleanup, err := stageSecretKey(cfg.Sign.SecretKeyCmd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		defer cleanup()
+		secretKey = path
+	}
+	fingerprint := ""
+	if cfg.Sign.PublicKey == "" {
+		fmt.Fprintln(os.Stderr, "warning: sign.public_key not set; repo.pub and "+
+			"the key install step in add.sh will be missing")
+	} else {
+		data, err := os.ReadFile(cfg.Sign.PublicKey)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: cannot read sign.public_key: %v\n", err)
+			return 1
+		}
+		fingerprint, err = pubkeyFingerprint(string(data))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: sign.public_key: %v\n", err)
+			return 1
+		}
+	}
+
+	// every feed dir under the output tree holds a Packages index
+	var leaves []string
+	filepath.WalkDir(cfg.OutputDir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && d.Name() == "Packages" {
+			leaves = append(leaves, filepath.Dir(p))
+		}
+		return nil
+	})
+	if len(leaves) == 0 {
+		fmt.Fprintf(os.Stderr, "error: no Packages indexes under %s — run build first\n",
+			cfg.OutputDir)
+		return 1
+	}
+	sort.Strings(leaves)
+
+	failures := 0
+	var relPaths []string
+	for _, leaf := range leaves {
+		rel, _ := filepath.Rel(cfg.OutputDir, leaf)
+		rel = filepath.ToSlash(rel)
+		if err := signIndex(leaf, secretKey); err != nil {
+			failures++
+			fmt.Fprintf(os.Stderr, "  ! sign failed for %s: %v\n", rel, err)
+			continue
+		}
+		relPaths = append(relPaths, rel)
+		fmt.Printf("  %s [signed]\n", rel)
+	}
+
+	// regenerate the helpers so add.sh installs the public key on the router
+	branchPrefix := "packages-" + cfg.Layout.Branch + "/"
+	feedSet := map[string]bool{}
+	for _, rel := range relPaths {
+		if strings.HasPrefix(rel, branchPrefix) {
+			if segs := strings.Split(rel, "/"); len(segs) >= 3 {
+				feedSet[segs[2]] = true
+			}
+		}
+	}
+	scripts, err := writeRepoHelpers(
+		cfg.OutputDir, cfg.Layout, sortedKeys(feedSet),
+		cfg.BaseURL, cfg.FeedPrefix, true, fingerprint, cfg.Sign.PublicKey,
+	)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	for _, s := range scripts {
+		rel, _ := filepath.Rel(cfg.OutputDir, s)
+		fmt.Printf("  wrote %s\n", filepath.ToSlash(rel))
+	}
+	if fingerprint != "" {
+		fmt.Println("  wrote repo.pub")
+	}
+	if failures > 0 {
+		fmt.Fprintf(os.Stderr, "error: %d index(es) failed to sign\n", failures)
+		return 1
+	}
+	return 0
+}
+
+// cmdVerify validates the signatures of an existing feed tree: every Packages
+// index must have a Packages.sig that verifies against sign.public_key, the
+// served repo.pub must match that key, and every release's add.sh must still
+// carry the key-install step (an unsigned rebuild regenerates add.sh without
+// it). Read-only; non-zero exit when anything is missing or does not verify.
+// dir overrides the config's output_dir ("" = use it).
+func cmdVerify(cfg *Config, dir string) int {
+	root := cfg.OutputDir
+	if dir != "" {
+		root = dir
+	}
+	if cfg.Sign.PublicKey == "" {
+		fmt.Fprintln(os.Stderr, "error: sign.public_key is not set in the config")
+		return 1
+	}
+	if !usignAvailable() {
+		fmt.Fprintln(os.Stderr, "error: usign not found on PATH")
+		return 1
+	}
+
+	var leaves []string
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && d.Name() == "Packages" {
+			leaves = append(leaves, filepath.Dir(p))
+		}
+		return nil
+	})
+	if len(leaves) == 0 {
+		fmt.Fprintf(os.Stderr, "error: no Packages indexes under %s\n", root)
+		return 1
+	}
+	sort.Strings(leaves)
+
+	ok, missing, bad := 0, 0, 0
+	for _, leaf := range leaves {
+		rel, _ := filepath.Rel(root, leaf)
+		rel = filepath.ToSlash(rel)
+		if _, err := os.Stat(filepath.Join(leaf, "Packages.sig")); err != nil {
+			missing++
+			fmt.Printf("  %s: MISSING signature\n", rel)
+			continue
+		}
+		if err := verifyIndex(leaf, cfg.Sign.PublicKey); err != nil {
+			bad++
+			fmt.Printf("  %s: INVALID (%v)\n", rel, err)
+			continue
+		}
+		ok++
+		fmt.Printf("  %s: ok\n", rel)
+	}
+
+	// the served repo.pub must be the key the routers install
+	want, err := os.ReadFile(cfg.Sign.PublicKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: cannot read sign.public_key: %v\n", err)
+		return 1
+	}
+	repoPub := filepath.Join(root, "repo.pub")
+	if got, err := os.ReadFile(repoPub); err != nil {
+		bad++
+		fmt.Printf("  repo.pub: MISSING (run `sign`)\n")
+	} else if !bytes.Equal(bytes.TrimSpace(got), bytes.TrimSpace(want)) {
+		bad++
+		fmt.Printf("  repo.pub: does NOT match sign.public_key\n")
+	} else {
+		fmt.Printf("  repo.pub: ok\n")
+	}
+
+	// an unsigned rebuild regenerates <release>/add.sh WITHOUT the key-install
+	// step while leaving valid signatures elsewhere — routers running such an
+	// installer would fail signature checks, so treat it as a broken tree
+	fingerprint, err := pubkeyFingerprint(string(want))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: sign.public_key: %v\n", err)
+		return 1
+	}
+	for _, release := range cfg.Layout.Versions {
+		addSh := filepath.Join(root, release, "add.sh")
+		data, err := os.ReadFile(addSh)
+		if err != nil {
+			continue // release not carried by this tree
+		}
+		if !strings.Contains(string(data), fingerprint) {
+			bad++
+			fmt.Printf("  %s/add.sh: no key-install step (run `sign`)\n", release)
+		} else {
+			fmt.Printf("  %s/add.sh: ok\n", release)
+		}
+	}
+
+	fmt.Printf("verified %d index(es): %d ok, %d missing, %d invalid\n",
+		len(leaves), ok, missing, bad)
+	if missing+bad > 0 {
+		return 1
+	}
+	return 0
 }
 
 func cmdServe(cfg *Config) int {
@@ -968,7 +1179,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `feedbuilder — collect .ipk packages from HTTP sources and build a signed opkg custom feed.
 
 usage:
-  feedbuilder [-c config.yaml] build [--refresh] [--full] [--only TYPE_OR_NAME[,...]]
+  feedbuilder [-c config.yaml] build [--refresh] [--full] [--sign] [--only TYPE_OR_NAME[,...]]
+  feedbuilder [-c config.yaml] sign
+  feedbuilder [-c config.yaml] verify
   feedbuilder [-c config.yaml] serve
   feedbuilder [-c config.yaml] genkey [--secret PATH] [--public PATH]
   feedbuilder --version`)
@@ -1023,6 +1236,8 @@ func Run(argv []string) int {
 			"(default merges incrementally: unchanged packages untouched, nothing removed)")
 		only := fs.String("only", "", "build only sources whose type or name matches "+
 			"(comma-separated globs, e.g. \"sdk\" or \"amnezia*,ssclash\")")
+		sign := fs.Bool("sign", false, "sign the touched indexes while building "+
+			"(default off; the `sign` command signs the whole tree afterwards)")
 		if err := fs.Parse(cmdArgs); err != nil {
 			return 2
 		}
@@ -1031,7 +1246,25 @@ func Run(argv []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		return cmdBuild(cfg, *refresh, *full, splitOnly(*only))
+		return cmdBuild(cfg, *refresh, *full, *sign, splitOnly(*only))
+	case "sign":
+		cfg, err := loadConfig(config)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdSign(cfg)
+	case "verify":
+		fs := flag.NewFlagSet("verify", flag.ContinueOnError)
+		if err := fs.Parse(cmdArgs); err != nil {
+			return 2
+		}
+		cfg, err := loadConfig(config)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdVerify(cfg, fs.Arg(0))
 	case "serve":
 		cfg, err := loadConfig(config)
 		if err != nil {

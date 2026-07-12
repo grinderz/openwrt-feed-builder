@@ -124,6 +124,22 @@ func signIndex(dir, secretKey string) error {
 	return cmd.Run()
 }
 
+// verifyIndex checks dir's Packages against its Packages.sig with the given
+// public key (usign -V).
+func verifyIndex(dir, publicKey string) error {
+	cmd := exec.Command("usign", "-V",
+		"-m", filepath.Join(dir, "Packages"),
+		"-x", filepath.Join(dir, "Packages.sig"),
+		"-p", publicKey)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+		return err
+	}
+	return nil
+}
+
 // pubkeyFingerprint computes the 16-hex-char key id OpenWrt uses as the
 // /etc/opkg/keys filename.
 //

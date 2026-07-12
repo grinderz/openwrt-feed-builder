@@ -35,11 +35,23 @@ Single static binary. Dependencies: `gopkg.in/yaml.v3`, `github.com/ulikunitz/xz
 ## Use
 
 ```sh
-./openwrt-feed-builder -c config.yaml build [--refresh] [--full] [--only TYPE_OR_NAME[,...]]
+./openwrt-feed-builder -c config.yaml build [--refresh] [--full] [--sign] [--only TYPE_OR_NAME[,...]]
+./openwrt-feed-builder -c config.yaml sign     # (re)sign an existing tree in place
+./openwrt-feed-builder -c config.yaml verify   # validate every signature + repo.pub
 ./openwrt-feed-builder -c config.yaml serve
 ./openwrt-feed-builder genkey [--secret keys/secret.key] [--public keys/public.key]
 ./openwrt-feed-builder --version
 ```
+
+`build` writes an UNSIGNED tree by default (an unsigned rebuild also drops the
+now-stale `Packages.sig` from every dir it touches). Signing is either opt-in
+per build (`--sign`) or a separate step: `sign` signs every `Packages` index
+under `output_dir` and regenerates `repo.pub` / `add.sh` with the key baked
+in, touching nothing else — it also covers trees built on a host without the
+keys and re-signing after a key rotation. `verify` is the read-only check:
+every `Packages` must have a `Packages.sig` that verifies against
+`sign.public_key` and the served `repo.pub` must match that key; non-zero
+exit otherwise (fits a pre-`publish` hook).
 
 `build` is incremental by default: it merges into the existing output tree,
 skips packages whose bytes are already in place (no copy / re-index / re-sign)
@@ -73,6 +85,11 @@ Deploy/publish plumbing lives in the `Makefile`; destinations go into
 `local.mk` (gitignored, see `local.mk.example`):
 
 ```sh
+make feed           # build the feed (FEED_ARGS="--full --sign --only sdk" for flags)
+make sign           # sign the tree in place
+make verify         # validate signatures (publish runs it automatically)
+make serve          # serve the feed over HTTP
+make genkey         # generate the usign keypair
 make deploy         # sync this repo -> DEPLOY_DEST (build host); deploy.diff = dry run
 make fetch          # pull the generated releases/ <- DEPLOY_DEST; fetch.diff = dry run
 make publish        # push releases/ -> PUBLISH_DEST (web server); publish.diff = dry run
@@ -81,16 +98,17 @@ make publish        # push releases/ -> PUBLISH_DEST (web server); publish.diff 
 Typical flow when sdk sources compile on a separate build host:
 
 ```sh
-make deploy                                  # code + config + keys to the build host
+make deploy                                  # code + config to the build host
 ssh <host> 'cd .../openwrt-feed-builder && go run ./cmd/openwrt-feed-builder build'
-make fetch                                   # signed feed (releases/ only) back here
+make fetch                                   # unsigned feed (releases/ only) back here
+./openwrt-feed-builder sign                  # sign it with the local keys
 make publish                                 # feed to the web server
 ```
 
-`make deploy` syncs `keys/` too — the build host builds AND signs the feed,
-this machine only fetches `releases/` and publishes it, so keep `DEPLOY_DEST`
-private. The host's `.cache/` and `releases/` are protected from `--delete`;
-`local.mk`, `config.yaml` and `keys/` sync with the laptop copies winning.
+`make deploy` never sends `keys/` — the usign secret stays on this machine;
+the build host produces an unsigned tree and `sign` runs here after `fetch`.
+The host's `.cache/`, `releases/` and `keys/` are protected from `--delete`;
+`local.mk` and `config.yaml` sync with the laptop copies winning.
 
 ## Signing (usign)
 
