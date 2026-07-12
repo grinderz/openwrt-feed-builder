@@ -1120,6 +1120,60 @@ func cmdVerify(cfg *Config, dir string) int {
 	return 0
 }
 
+// cmdHowto prints, for an already built output tree, the same "add this feed
+// on the router" instructions that build prints at the end — without building
+// anything. Feed dirs and their architectures are reconstructed from the
+// Packages indexes on disk; the tree counts as signed when every index has a
+// signature next to it.
+func cmdHowto(cfg *Config) int {
+	var relPaths []string
+	feedArches := map[string]map[string]bool{}
+	signedCount := 0
+	filepath.WalkDir(cfg.OutputDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "Packages" {
+			return nil
+		}
+		leaf := filepath.Dir(p)
+		rel, _ := filepath.Rel(cfg.OutputDir, leaf)
+		rel = filepath.ToSlash(rel)
+		relPaths = append(relPaths, rel)
+		if _, err := os.Stat(filepath.Join(leaf, "Packages.sig")); err == nil {
+			signedCount++
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		for _, st := range parseIndex(string(data)) {
+			if arch := st["Architecture"]; arch != "" && arch != "all" {
+				if feedArches[rel] == nil {
+					feedArches[rel] = map[string]bool{}
+				}
+				feedArches[rel][arch] = true
+			}
+		}
+		return nil
+	})
+	if len(relPaths) == 0 {
+		fmt.Fprintf(os.Stderr, "error: no Packages indexes under %s — run build first\n",
+			cfg.OutputDir)
+		return 1
+	}
+	sort.Strings(relPaths)
+
+	signed := signedCount == len(relPaths)
+	fingerprint := ""
+	if signed && cfg.Sign.PublicKey != "" {
+		if data, err := os.ReadFile(cfg.Sign.PublicKey); err == nil {
+			if fp, err := pubkeyFingerprint(string(data)); err == nil {
+				fingerprint = fp
+			}
+		}
+	}
+	printRouterHelp(cfg, relPaths, feedArches, signed, fingerprint)
+	return 0
+}
+
 func cmdServe(cfg *Config) int {
 	if err := serve(cfg.OutputDir, cfg.Serve.Host, cfg.Serve.Port); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -1182,6 +1236,7 @@ usage:
   feedbuilder [-c config.yaml] build [--refresh] [--full] [--sign] [--only TYPE_OR_NAME[,...]]
   feedbuilder [-c config.yaml] sign
   feedbuilder [-c config.yaml] verify
+  feedbuilder [-c config.yaml] howto
   feedbuilder [-c config.yaml] serve
   feedbuilder [-c config.yaml] genkey [--secret PATH] [--public PATH]
   feedbuilder --version`)
@@ -1265,6 +1320,13 @@ func Run(argv []string) int {
 			return 1
 		}
 		return cmdVerify(cfg, fs.Arg(0))
+	case "howto":
+		cfg, err := loadConfig(config)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdHowto(cfg)
 	case "serve":
 		cfg, err := loadConfig(config)
 		if err != nil {

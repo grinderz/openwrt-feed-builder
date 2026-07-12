@@ -66,6 +66,10 @@ sign: ## Sign the feed tree in place (Packages.sig + repo.pub + add.sh)
 verify: ## Validate every feed signature + repo.pub + add.sh key step
 	$(FEEDBUILDER) -c $(FEED_CONFIG) verify "$(PUBLISH_SRC)"
 
+.PHONY: howto
+howto: ## Print how to add the feed on a router (no build)
+	$(FEEDBUILDER) -c $(FEED_CONFIG) howto
+
 .PHONY: serve
 serve: ## Serve the feed over HTTP (config `serve` section)
 	$(FEEDBUILDER) -c $(FEED_CONFIG) serve

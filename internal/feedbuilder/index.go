@@ -40,11 +40,27 @@ func ipkFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
+// insertIndexFields places the index-only fields before the Description
+// field, matching the official ipkg-make-index.sh. opkg's index parser
+// drops fields that follow a multi-line Description, so appending them at
+// the end makes packages fail with "does not have a valid filename field".
+func insertIndexFields(control, fields string) string {
+	lines := strings.Split(strings.TrimRight(control, "\n"), "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "Description:") {
+			return strings.Join(lines[:i], "\n") + "\n" +
+				strings.TrimRight(fields, "\n") + "\n" +
+				strings.Join(lines[i:], "\n") + "\n"
+		}
+	}
+	return strings.Join(lines, "\n") + "\n" + fields
+}
+
 // buildPackagesIndex builds the text of a `Packages` index for every .ipk in dir.
 //
 // For each package we keep its original control block verbatim (so multi-line
-// Description fields and any custom fields survive) and append the index-only
-// fields opkg needs: Filename, Size, MD5Sum and SHA256sum.
+// Description fields and any custom fields survive) and insert the index-only
+// fields opkg needs (Filename, Size, MD5Sum, SHA256sum) before Description.
 func buildPackagesIndex(dir string) (string, int, error) {
 	files, err := ipkFiles(dir)
 	if err != nil {
@@ -61,13 +77,11 @@ func buildPackagesIndex(dir string) (string, int, error) {
 		if err != nil {
 			return "", 0, err
 		}
-		control = strings.TrimRight(control, "\n")
-		stanza := control + "\n" +
-			fmt.Sprintf("Filename: %s\n", filepath.Base(path)) +
+		fields := fmt.Sprintf("Filename: %s\n", filepath.Base(path)) +
 			fmt.Sprintf("Size: %d\n", len(data)) +
 			fmt.Sprintf("MD5Sum: %x\n", md5.Sum(data)) +
 			fmt.Sprintf("SHA256sum: %x\n", sha256.Sum256(data))
-		stanzas = append(stanzas, stanza)
+		stanzas = append(stanzas, insertIndexFields(control, fields))
 	}
 	content := strings.Join(stanzas, "\n") // blank line between stanzas
 	if content != "" && !strings.HasSuffix(content, "\n") {

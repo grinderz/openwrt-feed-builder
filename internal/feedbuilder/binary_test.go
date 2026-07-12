@@ -419,6 +419,27 @@ func TestBinaryEndToEndIndex(t *testing.T) {
 	}
 }
 
+func TestInsertIndexFields(t *testing.T) {
+	fields := "Filename: a_1.0_all.ipk\nSize: 1\n"
+
+	// opkg drops fields after a multi-line Description, so the index
+	// fields must land before it
+	control := "Package: a\nVersion: 1.0\nDescription:  first line\n second line\n"
+	got := insertIndexFields(control, fields)
+	want := "Package: a\nVersion: 1.0\nFilename: a_1.0_all.ipk\nSize: 1\nDescription:  first line\n second line\n"
+	if got != want {
+		t.Errorf("with description:\ngot:\n%q\nwant:\n%q", got, want)
+	}
+
+	// no Description at all: fields go last
+	control = "Package: a\nVersion: 1.0\n"
+	got = insertIndexFields(control, fields)
+	want = "Package: a\nVersion: 1.0\nFilename: a_1.0_all.ipk\nSize: 1\n"
+	if got != want {
+		t.Errorf("without description:\ngot:\n%q\nwant:\n%q", got, want)
+	}
+}
+
 func TestUpxOptions(t *testing.T) {
 	cases := []struct {
 		val     any

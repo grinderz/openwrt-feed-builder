@@ -38,6 +38,7 @@ Single static binary. Dependencies: `gopkg.in/yaml.v3`, `github.com/ulikunitz/xz
 ./openwrt-feed-builder -c config.yaml build [--refresh] [--full] [--sign] [--only TYPE_OR_NAME[,...]]
 ./openwrt-feed-builder -c config.yaml sign     # (re)sign an existing tree in place
 ./openwrt-feed-builder -c config.yaml verify   # validate every signature + repo.pub
+./openwrt-feed-builder -c config.yaml howto    # print how to add the feed on a router
 ./openwrt-feed-builder -c config.yaml serve
 ./openwrt-feed-builder genkey [--secret keys/secret.key] [--public keys/public.key]
 ./openwrt-feed-builder --version
@@ -88,6 +89,7 @@ Deploy/publish plumbing lives in the `Makefile`; destinations go into
 make feed           # build the feed (FEED_ARGS="--full --sign --only sdk" for flags)
 make sign           # sign the tree in place
 make verify         # validate signatures (publish runs it automatically)
+make howto          # print how to add the feed on a router
 make serve          # serve the feed over HTTP
 make genkey         # generate the usign keypair
 make deploy         # sync this repo -> DEPLOY_DEST (build host); deploy.diff = dry run
