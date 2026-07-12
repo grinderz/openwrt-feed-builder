@@ -40,16 +40,16 @@ DEPLOY_DEST ?=
 # never sent to the host; under --delete (without --delete-excluded) these
 # are also left alone on the receiver
 # leading / anchors a pattern to the repo root (bare names match anywhere)
-# keys/ holds the usign SECRET key — it never leaves this machine; copy it
-# manually or use sign.secret_key_cmd on the host
+# keys/ (the usign secret key) DOES sync: the build host builds and signs the
+# feed, the laptop only fetches the result — keep DEPLOY_DEST private
 DEPLOY_EXCLUDES := .git .claude .idea .DS_Store /openwrt-feed-builder /feedbuilder \
-	/.cache /releases '/releases.*' /output '/output.*' /keys \
+	/.cache /releases '/releases.*' /output '/output.*' \
 	'sdk-test-*' '*.log'
 # host-only state that must survive even an exclude-list mistake: rsync 'P'
 # filters forbid deletion regardless of --delete and exclude typos.
-# local.mk and config.yaml are deliberately NOT here: the laptop copies are
-# the source of truth and overwrite the host ones on deploy
-DEPLOY_PROTECT := .cache releases keys
+# local.mk, config.yaml and keys are deliberately NOT here: the laptop copies
+# are the source of truth and overwrite the host ones on deploy
+DEPLOY_PROTECT := .cache releases
 
 DEPLOY_RSYNC = rsync -av --delete \
 	$(foreach e,$(DEPLOY_EXCLUDES),--exclude=$(e)) \

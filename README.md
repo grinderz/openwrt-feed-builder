@@ -81,16 +81,16 @@ make publish        # push releases/ -> PUBLISH_DEST (web server); publish.diff 
 Typical flow when sdk sources compile on a separate build host:
 
 ```sh
-make deploy                                  # code + config to the build host
+make deploy                                  # code + config + keys to the build host
 ssh <host> 'cd .../openwrt-feed-builder && go run ./cmd/openwrt-feed-builder build'
-make fetch                                   # generated feed back to this machine
+make fetch                                   # signed feed (releases/ only) back here
 make publish                                 # feed to the web server
 ```
 
-`make deploy` never sends `keys/` (the usign secret stays on this machine;
-copy it manually or use `sign.secret_key_cmd` on the host) and protects the
-host's `.cache/`, `releases/` and `keys/` from `--delete`. `local.mk` and
-`config.yaml` do sync — the laptop copies win.
+`make deploy` syncs `keys/` too — the build host builds AND signs the feed,
+this machine only fetches `releases/` and publishes it, so keep `DEPLOY_DEST`
+private. The host's `.cache/` and `releases/` are protected from `--delete`;
+`local.mk`, `config.yaml` and `keys/` sync with the laptop copies winning.
 
 ## Signing (usign)
 
