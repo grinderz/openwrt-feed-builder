@@ -12,6 +12,8 @@ package feedbuilder
 //   - html       : an HTML autoindex / directory listing scraped for .ipk links
 //   - binary     : raw binaries / archives repacked into locally built .ipk
 //                  files (handled in binary.go, not here)
+//   - sdk        : packages compiled from source with the OpenWrt SDK via an
+//                  openwrt-buildroot checkout (handled in sdk.go, not here)
 //
 // Each resolver only yields URLs; downloading is handled by the cache so all
 // source types share one retrying, cached fetch path.
@@ -33,6 +35,24 @@ var (
 	hrefRE   = regexp.MustCompile(`(?i)href=["']([^"']+)["']`)
 	wildcard = "*?["
 )
+
+// remoteFile is one resolvable package file: its URL plus whatever integrity
+// metadata the source exposes (feed indexes carry size + sha256, the GitHub
+// APIs carry size, plain URL/html sources carry nothing). The cache uses the
+// metadata to validate an existing download instead of trusting the URL alone.
+type remoteFile struct {
+	url    string
+	size   int64  // expected byte size, 0 = unknown
+	sha256 string // expected hex sha256, "" = unknown
+}
+
+func urlsOnly(urls []string) []remoteFile {
+	out := make([]remoteFile, 0, len(urls))
+	for _, u := range urls {
+		out = append(out, remoteFile{url: u})
+	}
+	return out
+}
 
 func hasWildcard(s string) bool {
 	return strings.ContainsAny(s, wildcard)
@@ -156,7 +176,7 @@ func matchesInclExcl(name string, includes, excludes []string) bool {
 	return true
 }
 
-func feedURLs(client *Client, src Source) ([]string, error) {
+func feedURLs(client *Client, src Source) ([]remoteFile, error) {
 	base := strings.TrimRight(src.strOr("url", ""), "/")
 	var text string
 	var lastErr error
@@ -197,7 +217,7 @@ func feedURLs(client *Client, src Source) ([]string, error) {
 
 	includes := src.strSlice("include")
 	excludes := src.strSlice("exclude")
-	var out []string
+	var out []remoteFile
 	for _, stanza := range parseIndex(text) {
 		filename := stanza["Filename"]
 		pkg := stanza["Package"]
@@ -207,7 +227,13 @@ func feedURLs(client *Client, src Source) ([]string, error) {
 		if !matchesInclExcl(pkg, includes, excludes) {
 			continue
 		}
-		out = append(out, base+"/"+strings.TrimLeft(filename, "/"))
+		var size int64
+		fmt.Sscanf(stanza["Size"], "%d", &size)
+		out = append(out, remoteFile{
+			url:    base + "/" + strings.TrimLeft(filename, "/"),
+			size:   size,
+			sha256: strings.ToLower(strings.TrimSpace(stanza["SHA256sum"])),
+		})
 	}
 	return out, nil
 }
@@ -259,11 +285,13 @@ type ghContent struct {
 	Type        string `json:"type"`
 	Name        string `json:"name"`
 	Path        string `json:"path"`
+	Size        int64  `json:"size"`
 	DownloadURL string `json:"download_url"`
 }
 
 type ghAsset struct {
 	Name               string `json:"name"`
+	Size               int64  `json:"size"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
@@ -293,7 +321,7 @@ func parseGithubTreeURL(raw string) (repo, ref, p, pattern string, err error) {
 	return repo, ref, p, pattern, nil
 }
 
-func githubDirURLs(client *Client, src Source) ([]string, error) {
+func githubDirURLs(client *Client, src Source) ([]remoteFile, error) {
 	var repo, ref, p, pattern string
 	if u := src.strOr("url", ""); u != "" {
 		var err error
@@ -312,7 +340,7 @@ func githubDirURLs(client *Client, src Source) ([]string, error) {
 
 	recursive := src.boolOr("recursive", false)
 
-	var out []string
+	var out []remoteFile
 	stack := []string{p}
 	for len(stack) > 0 {
 		current := stack[len(stack)-1]
@@ -337,7 +365,7 @@ func githubDirURLs(client *Client, src Source) ([]string, error) {
 				continue
 			}
 			if entry.DownloadURL != "" && fnmatch(pattern, entry.Name) {
-				out = append(out, entry.DownloadURL)
+				out = append(out, remoteFile{url: entry.DownloadURL, size: entry.Size})
 			}
 		}
 	}
@@ -365,7 +393,7 @@ func decodeContents(body []byte) ([]ghContent, error) {
 // githubURLs resolves a github release source. Besides the asset URLs it
 // returns the resolved tag name (meaningful when tag is "latest"), which the
 // caller may use to derive a per-source kmod version.
-func githubURLs(client *Client, src Source) ([]string, string, error) {
+func githubURLs(client *Client, src Source) ([]remoteFile, string, error) {
 	repo := src.strOr("repo", "")
 	tag := src.strOr("tag", "latest")
 	var api string
@@ -389,10 +417,10 @@ func githubURLs(client *Client, src Source) ([]string, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	var out []string
+	var out []remoteFile
 	for _, a := range assets {
 		if fnmatch(pattern, a.Name) {
-			out = append(out, a.BrowserDownloadURL)
+			out = append(out, remoteFile{url: a.BrowserDownloadURL, size: a.Size})
 		}
 	}
 	return out, orDefault(release.TagName, tag), nil
@@ -432,7 +460,7 @@ func githubReleaseAssets(client *Client, repo string, releaseID int64) ([]ghAsse
 	return out, nil
 }
 
-func htmlURLs(client *Client, src Source) ([]string, error) {
+func htmlURLs(client *Client, src Source) ([]remoteFile, error) {
 	base := src.strOr("url", "")
 	html, err := client.fetchText(base)
 	if err != nil {
@@ -440,7 +468,7 @@ func htmlURLs(client *Client, src Source) ([]string, error) {
 	}
 	pattern := src.strOr("pattern", "*.ipk")
 	seen := map[string]bool{}
-	var out []string
+	var out []remoteFile
 	for _, m := range hrefRE.FindAllStringSubmatch(html, -1) {
 		href := m[1]
 		name := lastPathPart(stripQuery(href))
@@ -450,7 +478,7 @@ func htmlURLs(client *Client, src Source) ([]string, error) {
 		u := resolveURL(base, href)
 		if !seen[u] {
 			seen[u] = true
-			out = append(out, u)
+			out = append(out, remoteFile{url: u})
 		}
 	}
 	return out, nil
@@ -479,31 +507,32 @@ func expandSourceTags(src Source) []Source {
 	return out
 }
 
-// iterIPKURLs resolves one source into concrete .ipk URLs. The second return
-// value is the resolved release tag for github sources ("" for other types).
-func iterIPKURLs(client *Client, src Source) ([]string, string, error) {
+// iterIPKURLs resolves one source into concrete .ipk files (URL + integrity
+// metadata where the source exposes it). The second return value is the
+// resolved release tag for github sources ("" for other types).
+func iterIPKURLs(client *Client, src Source) ([]remoteFile, string, error) {
 	switch src.strOr("type", "") {
 	case "ipk":
-		var out []string
+		var out []remoteFile
 		for _, u := range src.strSlice("urls") {
 			expanded, err := expandIPKURL(client, u)
 			if err != nil {
 				return nil, "", err
 			}
-			out = append(out, expanded...)
+			out = append(out, urlsOnly(expanded)...)
 		}
 		return out, "", nil
 	case "feed":
-		urls, err := feedURLs(client, src)
-		return urls, "", err
+		files, err := feedURLs(client, src)
+		return files, "", err
 	case "github":
 		return githubURLs(client, src)
 	case "github_dir":
-		urls, err := githubDirURLs(client, src)
-		return urls, "", err
+		files, err := githubDirURLs(client, src)
+		return files, "", err
 	case "html":
-		urls, err := htmlURLs(client, src)
-		return urls, "", err
+		files, err := htmlURLs(client, src)
+		return files, "", err
 	default:
 		return nil, "", fmt.Errorf("unknown source type: %q", src.strOr("type", ""))
 	}

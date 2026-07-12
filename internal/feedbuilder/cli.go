@@ -19,6 +19,17 @@ import (
 
 var safeRE = regexp.MustCompile(`[^A-Za-z0-9._+~-]`)
 
+// splitOnly parses the --only flag value into patterns.
+func splitOnly(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
 func safeName(pkg, version, arch string) string {
 	raw := fmt.Sprintf("%s_%s_%s.ipk", pkg, version, arch)
 	return safeRE.ReplaceAllString(raw, "_")
@@ -115,15 +126,42 @@ type collectedPkg struct {
 	kmodVersion  string // point release the source is bound to ("" = none/layout default)
 }
 
+// sameSize reports whether two files exist and have equal size.
+func sameSize(a, b string) bool {
+	sa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	sb, err := os.Stat(b)
+	return err == nil && sa.Size() == sb.Size()
+}
+
+// onlyMatch reports whether a source passes the --only filter: any pattern
+// (shell glob) matching its type or its name selects it.
+func onlyMatch(only []string, typ, name string) bool {
+	for _, pattern := range only {
+		if fnmatch(pattern, typ) || fnmatch(pattern, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // collectPackages resolves every configured source to concrete .ipk URLs and
 // fetches them (cached), returning the downloaded packages and how many sources
 // failed. A github source with a `tags:` list expands into one pass per tag.
 // Each source is best-effort: a failure (404, timeout, rate limit, bad config)
-// skips just that source, not the whole build.
-func collectPackages(cfg *Config, client *Client, cache *Cache) ([]collectedPkg, int) {
+// skips just that source, not the whole build. A non-empty `only` restricts
+// the build to sources whose type or name matches one of its glob patterns.
+func collectPackages(cfg *Config, client *Client, cache *Cache, only []string) ([]collectedPkg, int) {
 	var collected []collectedPkg
+	var sdkSrcs []Source
 	failures := 0
 	for _, src := range cfg.Sources {
+		if len(only) > 0 && !onlyMatch(only, src.strOr("type", ""), src.strOr("name", "")) {
+			fmt.Printf("[%s] skipped (--only)\n", src.strOr("name", src.strOr("type", "")))
+			continue
+		}
 		for _, src := range expandSourceTags(src) {
 			name := src.strOr("name", src.strOr("type", ""))
 			if !src.boolOr("enabled", true) {
@@ -141,22 +179,28 @@ func collectPackages(cfg *Config, client *Client, cache *Cache) ([]collectedPkg,
 				collected = append(collected, pkgs...)
 				continue
 			}
-			urls, resolvedTag, err := iterIPKURLs(client, src)
+			if src.strOr("type", "") == "sdk" {
+				// gathered and built after the loop: sdk sources sharing a
+				// buildroot and release/target batch into one container run
+				sdkSrcs = append(sdkSrcs, src)
+				continue
+			}
+			files, resolvedTag, err := iterIPKURLs(client, src)
 			if err != nil {
 				failures++
 				fmt.Fprintf(os.Stderr, "[%s] skipped: %v\n", name, err)
 				continue
 			}
 			kmodVersion := sourceRelease(cfg.Layout, src, resolvedTag, name)
-			fmt.Printf("[%s] %d package url(s)\n", name, len(urls))
-			for _, u := range urls {
-				path, err := cache.get(u)
+			fmt.Printf("[%s] %d package url(s)\n", name, len(files))
+			for _, rf := range files {
+				path, err := cache.get(rf)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "  ! failed %s: %v\n", u, err)
+					fmt.Fprintf(os.Stderr, "  ! failed %s: %v\n", rf.url, err)
 					continue
 				}
 				collected = append(collected, collectedPkg{
-					url:          u,
+					url:          rf.url,
 					path:         path,
 					feedOverride: src.strOr("feed", ""),
 					sourceTarget: src.strOr("target", ""),
@@ -164,6 +208,14 @@ func collectPackages(cfg *Config, client *Client, cache *Cache) ([]collectedPkg,
 				})
 			}
 		}
+	}
+	if len(sdkSrcs) > 0 {
+		pkgs, sdkFailures := sdkCollect(cfg, cache, sdkSrcs)
+		failures += sdkFailures
+		if len(pkgs) > 0 {
+			fmt.Printf("[sdk] %d package(s) built from source\n", len(pkgs))
+		}
+		collected = append(collected, pkgs...)
 	}
 	return collected, failures
 }
@@ -191,7 +243,7 @@ func sourceRelease(layout Layout, src Source, resolvedTag, name string) string {
 	return ""
 }
 
-func cmdBuild(cfg *Config, refresh bool) int {
+func cmdBuild(cfg *Config, refresh, full bool, only []string) int {
 	client := newClient()
 	cache, err := newCache(cfg.CacheDir, client, refresh)
 	if err != nil {
@@ -199,8 +251,14 @@ func cmdBuild(cfg *Config, refresh bool) int {
 		return 1
 	}
 
+	if len(only) > 0 && full {
+		fmt.Printf("note: --only %s with --full — the rebuilt feed will contain ONLY the "+
+			"matching sources; run a full build without --only to restore the rest\n",
+			strings.Join(only, ","))
+	}
+
 	// 1. Resolve every source to concrete .ipk URLs and fetch them (cached).
-	collected, sourceFailures := collectPackages(cfg, client, cache)
+	collected, sourceFailures := collectPackages(cfg, client, cache, only)
 	if len(collected) == 0 {
 		if sourceFailures > 0 {
 			fmt.Fprintf(os.Stderr, "nothing collected (%d source(s) failed); "+
@@ -212,25 +270,36 @@ func cmdBuild(cfg *Config, refresh bool) int {
 	}
 
 	// 2. Snapshot the previous feed (package -> version per dir) so we can
-	//    report what changed at the end. The new tree is built in a sibling
-	//    staging dir and swapped into place only when complete, so the previous
-	//    feed stays intact (and keeps being served) if this build dies halfway.
+	//    report what changed at the end.
+	//
+	//    Default (incremental): merge into the existing output tree in place —
+	//    unchanged packages are left alone (no copy, no re-index, no re-sign),
+	//    nothing is ever removed. Packages superseded upstream accumulate
+	//    until a --full build prunes them.
+	//
+	//    --full: the tree is rebuilt from scratch in a sibling staging dir and
+	//    swapped into place only when complete, so the previous feed stays
+	//    intact (and keeps being served) if the build dies halfway. Packages
+	//    no longer produced by any source disappear.
 	oldVersions := snapshotVersions(cfg.OutputDir)
-	buildDir := cfg.OutputDir + ".building"
-	if err := os.RemoveAll(buildDir); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+	buildDir := cfg.OutputDir
+	swapped := false
+	if full {
+		buildDir = cfg.OutputDir + ".building"
+		if err := os.RemoveAll(buildDir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		defer func() {
+			if !swapped {
+				os.RemoveAll(buildDir)
+			}
+		}()
 	}
 	if err := os.MkdirAll(buildDir, 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	swapped := false
-	defer func() {
-		if !swapped {
-			os.RemoveAll(buildDir)
-		}
-	}()
 
 	// 3. Route each package into its layout directory.
 	archFilter := toSet(cfg.Architectures)
@@ -355,8 +424,8 @@ func cmdBuild(cfg *Config, refresh bool) int {
 
 	leafDirs := map[string]bool{}
 	feedArches := map[string]map[string]bool{} // rel feed dir -> real arches shipped there
-	newVersions := map[string]string{} // "<dir>|<pkg>" -> version (what we shipped)
-	routed, superseded := 0, 0
+	newVersions := map[string]string{}         // "<dir>|<pkg>" -> version (what we shipped)
+	routed, superseded, unchanged := 0, 0, 0
 	for _, slot := range slotOrder {
 		group := bySlot[slot]
 		// newest version first; within one version real-arch builds before the
@@ -395,6 +464,25 @@ func cmdBuild(cfg *Config, refresh bool) int {
 				fmt.Fprintf(os.Stderr, "  ! %v\n", err)
 				continue // try the next-newest candidate instead of dropping the package
 			}
+			// Incremental build: a byte-identical file already at the
+			// destination satisfies the slot without copying — and without
+			// touching the dir, so its index/signature stay as they are.
+			// Size compare first: hashing the destination is only worth it
+			// when it could actually match.
+			if !full && sameSize(cand.path, cand.dest) {
+				if destSha, err := sha256File(cand.dest); err == nil && destSha == sha {
+					placedSha, placedVersion = sha, cand.version
+					if cand.arch != "all" {
+						if feedArches[cand.rel] == nil {
+							feedArches[cand.rel] = map[string]bool{}
+						}
+						feedArches[cand.rel][cand.arch] = true
+					}
+					newVersions[cand.rel+"|"+cand.pkg] = cand.version
+					unchanged++
+					continue
+				}
+			}
 			if err := os.MkdirAll(cand.dir, 0o755); err != nil {
 				fmt.Fprintf(os.Stderr, "  ! %v\n", err)
 				continue
@@ -416,8 +504,9 @@ func cmdBuild(cfg *Config, refresh bool) int {
 		}
 	}
 
-	fmt.Printf("routed %d package(s), %d filtered out, %d older version(s) dropped, "+
-		"into %d feed dir(s)\n", routed, skipped, superseded, len(leafDirs))
+	fmt.Printf("routed %d package(s) (%d already up to date), %d filtered out, "+
+		"%d older version(s) dropped, %d feed dir(s) touched\n",
+		routed, unchanged, skipped, superseded, len(leafDirs))
 
 	// 4. Build (and optionally sign) the index in each leaf dir.
 	doSign := cfg.Sign.Enabled
@@ -466,15 +555,19 @@ func cmdBuild(cfg *Config, refresh bool) int {
 
 	leaves := sortedKeys(leafDirs)
 
+	relSet := map[string]bool{}
 	var relPaths []string
+	indexFailures := 0
 	for _, leaf := range leaves {
 		n, err := writeIndex(leaf)
 		if err != nil {
+			indexFailures++
 			fmt.Fprintf(os.Stderr, "  ! %v\n", err)
 			continue
 		}
 		rel, _ := filepath.Rel(buildDir, leaf)
 		rel = filepath.ToSlash(rel)
+		relSet[rel] = true
 		relPaths = append(relPaths, rel)
 		line := fmt.Sprintf("  %s: %d package(s)", rel, n)
 		if doSign {
@@ -485,6 +578,30 @@ func cmdBuild(cfg *Config, refresh bool) int {
 			}
 		}
 		fmt.Println(line)
+	}
+
+	// A feed dir whose index failed to (re)generate is broken for routers; a
+	// --full build must not swap such a tree over the previous good one, and
+	// any build must exit non-zero so wrappers notice.
+	if indexFailures > 0 && full {
+		fmt.Fprintf(os.Stderr, "error: %d feed index(es) failed to build; "+
+			"keeping the previous feed\n", indexFailures)
+		return 1
+	}
+
+	// An incremental build only touched some dirs; the helpers and the router
+	// help below must still describe the whole tree, so fold in the feed dirs
+	// that were already there (from the pre-build index snapshot).
+	if !full {
+		for key := range oldVersions {
+			if i := strings.LastIndex(key, "|"); i >= 0 {
+				if rel := key[:i]; !relSet[rel] {
+					relSet[rel] = true
+					relPaths = append(relPaths, rel)
+				}
+			}
+		}
+		sort.Strings(relPaths)
 	}
 
 	// 5. Write repo.pub + per-release add.sh helpers, wired to the branch feed
@@ -518,35 +635,42 @@ func cmdBuild(cfg *Config, refresh bool) int {
 			"using HOST:PORT placeholder)")
 	}
 
-	// 6. Swap the staged tree into place. The previous feed is replaced only by
-	//    a complete build; the window a concurrent 'serve' can see a missing
-	//    dir is the instant between the two renames.
-	oldDir := cfg.OutputDir + ".old"
-	if err := os.RemoveAll(oldDir); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	haveOld := false
-	if _, err := os.Stat(cfg.OutputDir); err == nil {
-		if err := os.Rename(cfg.OutputDir, oldDir); err != nil {
+	// 6. --full only: swap the staged tree into place. The previous feed is
+	//    replaced only by a complete build; the window a concurrent 'serve'
+	//    can see a missing dir is the instant between the two renames.
+	//    (Incremental builds worked in the output dir directly.)
+	if full {
+		oldDir := cfg.OutputDir + ".old"
+		if err := os.RemoveAll(oldDir); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		haveOld = true
-	}
-	if err := os.Rename(buildDir, cfg.OutputDir); err != nil {
-		if haveOld {
-			os.Rename(oldDir, cfg.OutputDir) // put the previous feed back
+		haveOld := false
+		if _, err := os.Stat(cfg.OutputDir); err == nil {
+			if err := os.Rename(cfg.OutputDir, oldDir); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			haveOld = true
 		}
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		if err := os.Rename(buildDir, cfg.OutputDir); err != nil {
+			if haveOld {
+				os.Rename(oldDir, cfg.OutputDir) // put the previous feed back
+			}
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		swapped = true
+		os.RemoveAll(oldDir)
 	}
-	swapped = true
-	os.RemoveAll(oldDir)
 
-	reportChanges(oldVersions, newVersions)
+	reportChanges(oldVersions, newVersions, full)
 
 	printRouterHelp(cfg, relPaths, feedArches, doSign, fingerprint)
+	if indexFailures > 0 {
+		fmt.Fprintf(os.Stderr, "error: %d feed index(es) failed to rebuild (see above)\n", indexFailures)
+		return 1
+	}
 	return 0
 }
 
@@ -578,8 +702,11 @@ func snapshotVersions(root string) map[string]string {
 
 // reportChanges prints, at the end of a build, what changed versus the previous
 // feed: packages added, upgraded, downgraded or removed (with versions). Keys
-// are "<dir>|<package>".
-func reportChanges(prev, cur map[string]string) {
+// are "<dir>|<package>". Removals only exist in a --full rebuild — an
+// incremental build never deletes anything, so entries missing from cur
+// (sources filtered by --only, failed, or simply unchanged-and-untouched)
+// are still on disk and are not reported.
+func reportChanges(prev, cur map[string]string, full bool) {
 	type change struct{ loc, pkg, from, to string }
 	var added, removed, upgraded, downgraded []change
 	split := func(k string) (string, string) {
@@ -602,10 +729,12 @@ func reportChanges(prev, cur map[string]string) {
 			downgraded = append(downgraded, change{loc, pkg, ov, nv})
 		}
 	}
-	for k, ov := range prev {
-		if _, ok := cur[k]; !ok {
-			loc, pkg := split(k)
-			removed = append(removed, change{loc, pkg, ov, ""})
+	if full {
+		for k, ov := range prev {
+			if _, ok := cur[k]; !ok {
+				loc, pkg := split(k)
+				removed = append(removed, change{loc, pkg, ov, ""})
+			}
 		}
 	}
 
@@ -839,7 +968,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `feedbuilder — collect .ipk packages from HTTP sources and build a signed opkg custom feed.
 
 usage:
-  feedbuilder [-c config.yaml] build [--refresh]
+  feedbuilder [-c config.yaml] build [--refresh] [--full] [--only TYPE_OR_NAME[,...]]
   feedbuilder [-c config.yaml] serve
   feedbuilder [-c config.yaml] genkey [--secret PATH] [--public PATH]
   feedbuilder --version`)
@@ -890,6 +1019,10 @@ func Run(argv []string) int {
 	case "build":
 		fs := flag.NewFlagSet("build", flag.ContinueOnError)
 		refresh := fs.Bool("refresh", false, "ignore cache, re-download everything")
+		full := fs.Bool("full", false, "rebuild the output tree from scratch "+
+			"(default merges incrementally: unchanged packages untouched, nothing removed)")
+		only := fs.String("only", "", "build only sources whose type or name matches "+
+			"(comma-separated globs, e.g. \"sdk\" or \"amnezia*,ssclash\")")
 		if err := fs.Parse(cmdArgs); err != nil {
 			return 2
 		}
@@ -898,7 +1031,7 @@ func Run(argv []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		return cmdBuild(cfg, *refresh)
+		return cmdBuild(cfg, *refresh, *full, splitOnly(*only))
 	case "serve":
 		cfg, err := loadConfig(config)
 		if err != nil {

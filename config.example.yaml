@@ -5,7 +5,8 @@
 # layout section below); every feed directory gets its own Packages /
 # Packages.gz (and Packages.sig when signing is enabled).
 
-output_dir: ./releases        # generated feed goes here (recreated on every build)
+output_dir: ./releases        # generated feed goes here (the default); builds merge
+                              # into it incrementally, --full recreates it
 cache_dir: ./.cache         # raw downloads are cached here between runs
 
 # Public URL where the feed will be served. Embedded into the generated
@@ -133,7 +134,7 @@ sources:
   - type: github_dir
     name: gspotx2f-2410
     url: https://github.com/gSpotx2f/packages-openwrt/tree/master/24.10/*.ipk
-    #feed: grinderz     # override the feed directory name for this source
+    #feed: myfeed       # override the feed directory name for this source
 
   # 6) GitHub releases whose assets embed the target/subtarget in the file name
   #    (<pkg>_<ver>_<arch>_<target>_<subtarget>.ipk); the target/subtarget is
@@ -144,7 +145,7 @@ sources:
     repo: Slava-Shchipunov/awg-openwrt
     tag: v24.10.7               # single tag; or use `tags: [v24.10.6, v24.10.7]`
     asset_match: "*.ipk"
-    #feed: grinderz
+    #feed: myfeed
 
   - type: github
     name: ssclash
@@ -203,3 +204,44 @@ sources:
     #   #!/bin/sh
     #   exit 0
     # feed: clash             # feed dir override, same as other sources
+
+  # 8) Packages compiled from source with the official OpenWrt SDK, driven
+  #    through an openwrt-buildroot checkout (its `make pkg.<name>` target runs
+  #    the SDK docker image). For packages nobody ships as binaries — e.g. the
+  #    AmneziaWG kernel module, which must be built per release/target against
+  #    the exact kernel. Needs docker + GNU make >= 4.4 on the build host, and
+  #    a versions/<release>.mk in the buildroot for every release built.
+  #    All sdk sources sharing a buildroot and a (release x target) pair are
+  #    batched into ONE container run: feeds merged, packages built together
+  #    (keep feed names distinct across sources). Results are cached per
+  #    source under <cache_dir>/sdk/ and rebuilt only with --refresh.
+  - type: sdk
+    name: amneziawg-src
+    enabled: false
+    buildroot: ../openwrt-buildroot   # path to the openwrt-buildroot checkout
+    #                                 # (relative to this config file)
+    # The build matrix defaults to layout.version x the global targets list;
+    # narrow it per source (targets must be full "target/subtarget"):
+    releases: ["24.10.7"]
+    # targets: ["ramips/mt7621", "mediatek/filogic"]
+    feeds:                    # extra feed lines for the SDK's feeds.conf
+      - src-git awg https://github.com/Slava-Shchipunov/awg-openwrt.git;feat/add-custom-feed
+    packages: [kmod-amneziawg, amneziawg-tools, luci-proto-amneziawg]
+    # include: ["kmod-amneziawg*"]  # Package-name globs selecting which built
+    #                               # .ipk files are kept; default <pkg>* per
+    #                               # packages entry (dependency ipks the SDK
+    #                               # built along the way are dropped)
+    # exclude: []
+    # builder: official       # "official" = openwrt/sdk docker image (default);
+    #                         # "src" = SDK from the buildroot's own src build
+    #                         # (make src.all first) — for targets whose kernel
+    #                         # or config diverges from the official release
+    # release_bound: false    # true pins built USERSPACE to its release's
+    #                         # targets/.../packages/ (kmods always are); the
+    #                         # default routes userspace into the branch-wide
+    #                         # packages-<branch>/<arch>/ feed
+    # artifacts_dir: artifacts  # the buildroot's artifacts dir (relative to
+    #                           # the checkout); build output is read from
+    #                           # <artifacts>/pkg/<release>/tmp
+    # make: gmake             # make binary (default gmake if present, else make)
+    # feed: awg               # feed dir override, same as other sources

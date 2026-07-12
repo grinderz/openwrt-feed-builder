@@ -9,5 +9,5 @@
 /releases.old
 /keys
 config.yaml
-deploy.conf
+local.mk
 .idea/

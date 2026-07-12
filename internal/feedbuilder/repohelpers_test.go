@@ -16,7 +16,7 @@ func TestWriteRepoHelpers(t *testing.T) {
 		DefaultFeed: "packages",
 	}
 
-	scripts, err := writeRepoHelpers(dir, layout, []string{"packages", "grinderz"},
+	scripts, err := writeRepoHelpers(dir, layout, []string{"packages", "myfeed"},
 		"http://feed.example/openwrt", "myfeed", false, "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestWriteRepoHelpers(t *testing.T) {
 		// feed dirs come from the build (default + override), probed in a loop
 		// with the all/ dir as a fallback
 		for _, want := range []string{
-			`for FEED in packages grinderz; do`,
+			`for FEED in packages myfeed; do`,
 			`add_feed "myfeed_${ARCH}_${FEED}"`,
 			`add_feed "myfeed_all_${FEED}"`,
 			"packages-$BRANCH/$ARCH/$FEED",

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -134,16 +135,58 @@ func (c *Cache) pathFor(url string) string {
 	return filepath.Join(c.dir, hex.EncodeToString(sum[:])+".ipk")
 }
 
-// get returns the local path of url's content, downloading it if needed.
-func (c *Cache) get(url string) (string, error) {
-	path := c.pathFor(url)
+// get returns the local path of a remote file's content, downloading it if
+// needed. An existing download is validated against the metadata the source
+// exposes (size, sha256): a match skips the network entirely, a mismatch
+// (upstream republished under the same URL, or a corrupted download)
+// re-fetches. Sources without metadata keep the URL-existence behavior.
+func (c *Cache) get(rf remoteFile) (string, error) {
+	path := c.pathFor(rf.url)
 	if !c.refresh {
 		if _, err := os.Stat(path); err == nil {
-			return path, nil
+			mismatch, err := cachedMismatch(path, rf)
+			if err == nil && mismatch == "" {
+				return path, nil
+			}
+			if mismatch != "" {
+				fmt.Fprintf(os.Stderr, "  ~ cached %s: %s; re-downloading\n",
+					lastPathPart(stripQuery(rf.url)), mismatch)
+			}
 		}
 	}
-	if err := c.client.fetchToFile(url, path); err != nil {
+	if err := c.client.fetchToFile(rf.url, path); err != nil {
 		return "", err
 	}
+	if mismatch, err := cachedMismatch(path, rf); err != nil {
+		return "", err
+	} else if mismatch != "" {
+		os.Remove(path)
+		return "", fmt.Errorf("downloaded %s does not match the source's metadata: %s", rf.url, mismatch)
+	}
 	return path, nil
+}
+
+// cachedMismatch compares a local file against a remoteFile's expected size
+// and sha256, returning a human-readable description of the first mismatch
+// ("" = everything known matches).
+func cachedMismatch(path string, rf remoteFile) (string, error) {
+	if rf.size > 0 {
+		st, err := os.Stat(path)
+		if err != nil {
+			return "", err
+		}
+		if st.Size() != rf.size {
+			return fmt.Sprintf("size %d != expected %d", st.Size(), rf.size), nil
+		}
+	}
+	if rf.sha256 != "" {
+		sum, err := sha256File(path)
+		if err != nil {
+			return "", err
+		}
+		if !strings.EqualFold(sum, rf.sha256) {
+			return "sha256 mismatch", nil
+		}
+	}
+	return "", nil
 }

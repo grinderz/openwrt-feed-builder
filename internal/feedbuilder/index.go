@@ -45,51 +45,40 @@ func ipkFiles(dir string) ([]string, error) {
 // For each package we keep its original control block verbatim (so multi-line
 // Description fields and any custom fields survive) and append the index-only
 // fields opkg needs: Filename, Size, MD5Sum and SHA256sum.
-func buildPackagesIndex(dir string) (string, error) {
+func buildPackagesIndex(dir string) (string, int, error) {
 	files, err := ipkFiles(dir)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	var stanzas []string
 	for _, path := range files {
-		control, err := readControl(path)
+		// one read serves the control extraction, both checksums and the size
+		data, err := os.ReadFile(path)
 		if err != nil {
-			return "", err
+			return "", 0, err
+		}
+		control, err := readControlBytes(data, path)
+		if err != nil {
+			return "", 0, err
 		}
 		control = strings.TrimRight(control, "\n")
-		info, err := os.Stat(path)
-		if err != nil {
-			return "", err
-		}
-		md5sum, err := hashFile(path, md5.New())
-		if err != nil {
-			return "", err
-		}
-		sha, err := hashFile(path, sha256.New())
-		if err != nil {
-			return "", err
-		}
 		stanza := control + "\n" +
 			fmt.Sprintf("Filename: %s\n", filepath.Base(path)) +
-			fmt.Sprintf("Size: %d\n", info.Size()) +
-			fmt.Sprintf("MD5Sum: %s\n", md5sum) +
-			fmt.Sprintf("SHA256sum: %s\n", sha)
+			fmt.Sprintf("Size: %d\n", len(data)) +
+			fmt.Sprintf("MD5Sum: %x\n", md5.Sum(data)) +
+			fmt.Sprintf("SHA256sum: %x\n", sha256.Sum256(data))
 		stanzas = append(stanzas, stanza)
 	}
 	content := strings.Join(stanzas, "\n") // blank line between stanzas
 	if content != "" && !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
-	return content, nil
+	return content, len(files), nil
 }
 
 // writeIndex writes Packages and Packages.gz into dir. Returns package count.
 func writeIndex(dir string) (int, error) {
-	content, err := buildPackagesIndex(dir)
-	if err != nil {
-		return 0, err
-	}
-	files, err := ipkFiles(dir)
+	content, count, err := buildPackagesIndex(dir)
 	if err != nil {
 		return 0, err
 	}
@@ -117,7 +106,7 @@ func writeIndex(dir string) (int, error) {
 	if err := gzFile.Close(); err != nil {
 		return 0, err
 	}
-	return len(files), nil
+	return count, nil
 }
 
 func usignAvailable() bool {

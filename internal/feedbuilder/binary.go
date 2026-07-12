@@ -271,7 +271,7 @@ func binaryPackages(cfg *Config, client *Client, cache *Cache, src Source) ([]co
 			}
 		}
 
-		rawPath, err := cache.get(assetURL)
+		rawPath, err := cache.get(remoteFile{url: assetURL})
 		if err != nil {
 			return nil, fmt.Errorf("fetch %s: %w", assetURL, err)
 		}

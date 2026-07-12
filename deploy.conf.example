@@ -1,3 +1,0 @@
-# Configuration for deploy.sh (sourced as shell).
-DEPLOY_SRC="releases"
-DEPLOY_TARGET="vps_selectel_msk:/var/www/openwrt/"

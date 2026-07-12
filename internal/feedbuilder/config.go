@@ -106,6 +106,7 @@ type ServeConfig struct {
 
 // Config is the fully resolved configuration.
 type Config struct {
+	BaseDir       string // directory of the config file; relative paths resolve against it
 	OutputDir     string
 	CacheDir      string
 	Sources       []Source
@@ -290,7 +291,8 @@ func loadConfig(path string) (*Config, error) {
 	}
 
 	return &Config{
-		OutputDir:     resolve(asString(data["output_dir"], "./output")),
+		BaseDir:       base,
+		OutputDir:     resolve(asString(data["output_dir"], "./releases")),
 		CacheDir:      resolve(asString(data["cache_dir"], "./.cache")),
 		Sources:       sources,
 		Architectures: architectures,

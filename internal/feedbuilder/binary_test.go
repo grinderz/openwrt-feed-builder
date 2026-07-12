@@ -38,7 +38,7 @@ func TestParseMode(t *testing.T) {
 		{"0755", 0o755},
 		{"0644", 0o644},
 		{"0o600", 0o600},
-		{755, 0o755},   // bare decimal (yaml saw no leading zero): digits are octal
+		{755, 0o755}, // bare decimal (yaml saw no leading zero): digits are octal
 		{644, 0o644},
 		{493, 0o755}, // yaml.v3 already octal-decoded `mode: 0755` into 493
 		{420, 0o644}, // yaml.v3 already octal-decoded `mode: 0644` into 420

@@ -45,7 +45,7 @@ func readArMembers(data []byte) (map[string][]byte, error) {
 		name := strings.TrimSpace(string(header[0:16]))
 		sizeField := strings.TrimSpace(string(header[48:58]))
 		size, err := strconv.Atoi(sizeField)
-		if err != nil {
+		if err != nil || size < 0 { // a negative size would slice data[pos:pos+size] backwards
 			break
 		}
 		if pos+size > n {
@@ -112,7 +112,12 @@ func readControl(ipkPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return readControlBytes(data, ipkPath)
+}
 
+// readControlBytes is readControl over an already-loaded package (callers that
+// also hash the file read it once and share the bytes). name is only for errors.
+func readControlBytes(data []byte, name string) (string, error) {
 	if len(data) >= 8 && bytes.Equal(data[:8], arMagic) {
 		members, err := readArMembers(data)
 		if err != nil {
@@ -126,7 +131,7 @@ func readControl(ipkPath string) (string, error) {
 			}
 		}
 		if controlTar == nil {
-			return "", fmt.Errorf("no control.tar.* inside %s", ipkPath)
+			return "", fmt.Errorf("no control.tar.* inside %s", name)
 		}
 		ctrl, err := extractMemberFromTar(controlTar, "control")
 		if err != nil {
@@ -148,7 +153,7 @@ func readControl(ipkPath string) (string, error) {
 		return string(ctrl), nil
 	}
 
-	return "", fmt.Errorf("unrecognized .ipk format: %s", ipkPath)
+	return "", fmt.Errorf("unrecognized .ipk format: %s", name)
 }
 
 // parseFields parses a Debian-style control block into a field->value map.

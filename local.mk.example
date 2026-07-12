@@ -1,0 +1,10 @@
+# Local user config: cp local.mk.example local.mk (gitignored; note deploy
+# DOES sync local.mk itself, the laptop copy wins on the host).
+
+# rsync destination for `make deploy` — this repo to a build host
+# (user@host:/path, no trailing slash)
+DEPLOY_DEST := user@buildhost:/home/user/src/openwrt-feed-builder
+
+# rsync destination for `make publish` — the generated feed (releases/) to the
+# web server (host:/path/, trailing slash: the releases dir lands inside it)
+PUBLISH_DEST := webserver:/var/www/openwrt/
