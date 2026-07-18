@@ -83,6 +83,16 @@ func sortedKeys(set map[string]bool) []string {
 	return keys
 }
 
+// sortedStringKeys returns the keys of any string-keyed map in sorted order.
+func sortedStringKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // stageSecretKey runs a shell command that prints a usign secret key and writes
 // its output to a private (0600) temp file, since usign reads the key from a
 // path. It returns the path and a cleanup func that removes the file. The key
@@ -273,9 +283,9 @@ func cmdBuild(cfg *Config, refresh, full, sign bool, only []string) int {
 	//    report what changed at the end.
 	//
 	//    Default (incremental): merge into the existing output tree in place —
-	//    unchanged packages are left alone (no copy, no re-index, no re-sign),
-	//    nothing is ever removed. Packages superseded upstream accumulate
-	//    until a --full build prunes them.
+	//    unchanged packages are left alone (no copy, no re-index, no re-sign).
+	//    Older versions of packages this run ships are pruned (step 3d);
+	//    packages no longer produced by any source stay until a --full build.
 	//
 	//    --full: the tree is rebuilt from scratch in a sibling staging dir and
 	//    swapped into place only when complete, so the previous feed stays
@@ -504,9 +514,71 @@ func cmdBuild(cfg *Config, refresh, full, sign bool, only []string) int {
 		}
 	}
 
+	// 3d. Prune superseded .ipk files: for every package this run shipped (or
+	//     confirmed in place), older versions of it in the same dir are
+	//     removed. Packages from sources not part of this run keep all their
+	//     files. A prune in a dir that was otherwise untouched marks it for
+	//     re-indexing, so the index never references a removed file.
+	keepByDir := map[string]map[string]string{} // dir -> pkg -> version kept
+	for key, ver := range newVersions {
+		if i := strings.LastIndex(key, "|"); i >= 0 {
+			dir := filepath.Join(buildDir, filepath.FromSlash(key[:i]))
+			if keepByDir[dir] == nil {
+				keepByDir[dir] = map[string]string{}
+			}
+			keepByDir[dir][key[i+1:]] = ver
+		}
+	}
+	pruned := 0
+	var prunedFiles []string
+	for _, dir := range sortedStringKeys(keepByDir) {
+		keep := keepByDir[dir]
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || !strings.HasSuffix(name, ".ipk") {
+				continue
+			}
+			// cheap filename filter first; the control file decides
+			candidate := false
+			for pkg := range keep {
+				if strings.HasPrefix(name, pkg+"_") {
+					candidate = true
+					break
+				}
+			}
+			if !candidate {
+				continue
+			}
+			path := filepath.Join(dir, name)
+			control, err := readControl(path)
+			if err != nil {
+				continue
+			}
+			fields := parseFields(control)
+			ver, ok := keep[fields["Package"]]
+			if !ok || compareVersion(fields["Version"], ver) >= 0 {
+				continue
+			}
+			if err := os.Remove(path); err != nil {
+				fmt.Fprintf(os.Stderr, "  ! prune failed: %v\n", err)
+				continue
+			}
+			pruned++
+			rel, _ := filepath.Rel(buildDir, dir)
+			prunedFiles = append(prunedFiles, filepath.ToSlash(rel)+"/"+name)
+			fmt.Printf("  - pruned %s/%s\n", filepath.ToSlash(rel), name)
+			leafDirs[dir] = true
+		}
+	}
+
 	fmt.Printf("routed %d package(s) (%d already up to date), %d filtered out, "+
-		"%d older version(s) dropped, %d feed dir(s) touched\n",
-		routed, unchanged, skipped, superseded, len(leafDirs))
+		"%d older version(s) dropped, %d superseded file(s) pruned, "+
+		"%d feed dir(s) touched\n",
+		routed, unchanged, skipped, superseded, pruned, len(leafDirs))
 
 	// 4. Build the index in each touched leaf dir. Signing is opt-in
 	//    (--sign); without it run the `sign` command afterwards — it signs
@@ -675,7 +747,7 @@ func cmdBuild(cfg *Config, refresh, full, sign bool, only []string) int {
 		os.RemoveAll(oldDir)
 	}
 
-	reportChanges(oldVersions, newVersions, full)
+	reportChanges(oldVersions, newVersions, prunedFiles, full)
 
 	printRouterHelp(cfg, relPaths, feedArches, doSign, fingerprint)
 	if indexFailures > 0 {
@@ -712,12 +784,13 @@ func snapshotVersions(root string) map[string]string {
 }
 
 // reportChanges prints, at the end of a build, what changed versus the previous
-// feed: packages added, upgraded, downgraded or removed (with versions). Keys
-// are "<dir>|<package>". Removals only exist in a --full rebuild — an
-// incremental build never deletes anything, so entries missing from cur
-// (sources filtered by --only, failed, or simply unchanged-and-untouched)
-// are still on disk and are not reported.
-func reportChanges(prev, cur map[string]string, full bool) {
+// feed: packages added, upgraded, downgraded or removed (with versions), plus
+// the superseded .ipk files pruned this run. Keys are "<dir>|<package>".
+// Removals only exist in a --full rebuild — in an incremental build, entries
+// missing from cur (sources filtered by --only, failed, or simply
+// unchanged-and-untouched) are still on disk and are not reported; the only
+// deletions are the pruned files, listed by path.
+func reportChanges(prev, cur map[string]string, prunedFiles []string, full bool) {
 	type change struct{ loc, pkg, from, to string }
 	var added, removed, upgraded, downgraded []change
 	split := func(k string) (string, string) {
@@ -749,7 +822,7 @@ func reportChanges(prev, cur map[string]string, full bool) {
 		}
 	}
 
-	if len(added)+len(upgraded)+len(downgraded)+len(removed) == 0 {
+	if len(added)+len(upgraded)+len(downgraded)+len(removed)+len(prunedFiles) == 0 {
 		fmt.Println("\nchanges: none (package set identical to previous build)")
 		return
 	}
@@ -766,8 +839,9 @@ func reportChanges(prev, cur map[string]string, full bool) {
 	sortCh(added)
 	sortCh(removed)
 
-	fmt.Printf("\nchanges: %d new, %d updated, %d downgraded, %d removed\n",
-		len(added), len(upgraded), len(downgraded), len(removed))
+	fmt.Printf("\nchanges: %d new, %d updated, %d downgraded, %d removed, "+
+		"%d superseded file(s) pruned\n",
+		len(added), len(upgraded), len(downgraded), len(removed), len(prunedFiles))
 	for _, c := range upgraded {
 		fmt.Printf("  ~ %s/%s: %s -> %s\n", c.loc, c.pkg, c.from, c.to)
 	}
@@ -779,6 +853,9 @@ func reportChanges(prev, cur map[string]string, full bool) {
 	}
 	for _, c := range removed {
 		fmt.Printf("  - %s/%s: %s\n", c.loc, c.pkg, c.from)
+	}
+	for _, f := range prunedFiles {
+		fmt.Printf("  x %s  (superseded)\n", f)
 	}
 }
 
@@ -1288,7 +1365,8 @@ func Run(argv []string) int {
 		fs := flag.NewFlagSet("build", flag.ContinueOnError)
 		refresh := fs.Bool("refresh", false, "ignore cache, re-download everything")
 		full := fs.Bool("full", false, "rebuild the output tree from scratch "+
-			"(default merges incrementally: unchanged packages untouched, nothing removed)")
+			"(default merges incrementally: unchanged packages untouched, only "+
+			"superseded versions of shipped packages removed)")
 		only := fs.String("only", "", "build only sources whose type or name matches "+
 			"(comma-separated globs, e.g. \"sdk\" or \"amnezia*,ssclash\")")
 		sign := fs.Bool("sign", false, "sign the touched indexes while building "+

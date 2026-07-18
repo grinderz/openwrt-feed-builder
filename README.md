@@ -54,11 +54,12 @@ every `Packages` must have a `Packages.sig` that verifies against
 `sign.public_key` and the served `repo.pub` must match that key; non-zero
 exit otherwise (fits a pre-`publish` hook).
 
-`build` is incremental by default: it merges into the existing output tree,
-skips packages whose bytes are already in place (no copy / re-index / re-sign)
-and never removes anything — superseded versions accumulate until a `--full`
-build rebuilds the tree from scratch (staged + atomically swapped) and prunes
-them. Cached downloads are validated against the metadata the source exposes
+`build` is incremental by default: it merges into the existing output tree and
+skips packages whose bytes are already in place (no copy / re-index / re-sign).
+When a package ships a newer version, its older `.ipk` files in the same dir
+are pruned and the index rebuilt; packages no longer produced by any source
+stay until a `--full` build rebuilds the tree from scratch (staged +
+atomically swapped). Cached downloads are validated against the metadata the source exposes
 and re-fetched on mismatch. `--only` limits the run to matching sources;
 combined with the incremental default the rest of the feed stays as-is.
 
