@@ -402,7 +402,7 @@ func TestBinaryEndToEndIndex(t *testing.T) {
 	if err := copyFile(pkgs[0].path, filepath.Join(feedDir, filepath.Base(pkgs[0].path))); err != nil {
 		t.Fatal(err)
 	}
-	n, err := writeIndex(feedDir)
+	n, err := writeIndex(feedDir, "")
 	if err != nil {
 		t.Fatal(err)
 	}

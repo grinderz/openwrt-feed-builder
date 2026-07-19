@@ -4,6 +4,7 @@ package feedbuilder
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"flag"
 	"fmt"
@@ -253,7 +254,7 @@ func sourceRelease(layout Layout, src Source, resolvedTag, name string) string {
 	return ""
 }
 
-func cmdBuild(cfg *Config, refresh, full, sign, reindex bool, only []string) int {
+func cmdBuild(cfg *Config, refresh, full, sign, reindex bool, indexScript string, only []string) int {
 	client := newClient()
 	cache, err := newCache(cfg.CacheDir, client, refresh)
 	if err != nil {
@@ -651,7 +652,7 @@ func cmdBuild(cfg *Config, refresh, full, sign, reindex bool, only []string) int
 	var relPaths []string
 	indexFailures := 0
 	for _, leaf := range leaves {
-		n, err := writeIndex(leaf)
+		n, err := writeIndex(leaf, indexScript)
 		if err != nil {
 			indexFailures++
 			fmt.Fprintf(os.Stderr, "  ! %v\n", err)
@@ -1320,11 +1321,81 @@ func cmdGenkey(secret, public string) int {
 	return 0
 }
 
+// cmdIndexDiff regenerates every feed index twice — natively and with the
+// official ipkg-make-index.sh — and shows a unified diff per feed dir.
+// Nothing on disk is touched. Known, expected deviations of the script:
+// control fields pass through unstripped (Source*, Maintainer), no MD5Sum,
+// kernel/libc packages skipped.
+func cmdIndexDiff(cfg *Config, script string) int {
+	if _, err := os.Stat(script); err != nil {
+		fmt.Fprintf(os.Stderr, "error: index script: %v\n", err)
+		return 1
+	}
+	leafSet := map[string]bool{}
+	filepath.WalkDir(cfg.OutputDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if strings.HasSuffix(d.Name(), ".ipk") {
+			leafSet[filepath.Dir(path)] = true
+		}
+		return nil
+	})
+	if len(leafSet) == 0 {
+		fmt.Fprintf(os.Stderr, "no feed dirs with .ipk files under %s\n", cfg.OutputDir)
+		return 1
+	}
+
+	differing := 0
+	for _, leaf := range sortedKeys(leafSet) {
+		rel, _ := filepath.Rel(cfg.OutputDir, leaf)
+		native, _, err := buildPackagesIndex(leaf)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  ! %s: native indexer: %v\n", rel, err)
+			return 1
+		}
+		scripted, _, err := scriptPackagesIndex(leaf, script)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", rel, err)
+			return 1
+		}
+		if native == scripted {
+			fmt.Printf("== %s: identical\n", rel)
+			continue
+		}
+		differing++
+		fmt.Printf("== %s: differs\n", rel)
+		tmp, err := os.MkdirTemp("", "feedbuilder-indexdiff-")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		nativePath := filepath.Join(tmp, "Packages.native")
+		scriptPath := filepath.Join(tmp, "Packages.script")
+		errN := os.WriteFile(nativePath, []byte(native), 0o644)
+		errS := os.WriteFile(scriptPath, []byte(scripted), 0o644)
+		if errN != nil || errS != nil {
+			fmt.Fprintln(os.Stderr, cmp.Or(errN, errS))
+			os.RemoveAll(tmp)
+			return 1
+		}
+		diff := exec.Command("diff", "-u", "--label", rel+" (native)", nativePath,
+			"--label", rel+" (ipkg-make-index.sh)", scriptPath)
+		diff.Stdout = os.Stdout
+		diff.Stderr = os.Stderr
+		diff.Run() // exit 1 just means "files differ"
+		os.RemoveAll(tmp)
+	}
+	fmt.Printf("%d dir(s) compared, %d differ\n", len(leafSet), differing)
+	return 0
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, `feedbuilder — collect .ipk packages from HTTP sources and build a signed opkg custom feed.
 
 usage:
-  feedbuilder [-c config.yaml] build [--refresh] [--full] [--sign] [--reindex] [--only TYPE_OR_NAME[,...]]
+  feedbuilder [-c config.yaml] build [--refresh] [--full] [--sign] [--reindex] [--index-script PATH] [--only TYPE_OR_NAME[,...]]
+  feedbuilder [-c config.yaml] indexdiff [--script PATH]
   feedbuilder [-c config.yaml] sign
   feedbuilder [-c config.yaml] verify
   feedbuilder [-c config.yaml] howto
@@ -1387,6 +1458,9 @@ func Run(argv []string) int {
 			"(default off; the `sign` command signs the whole tree afterwards)")
 		reindex := fs.Bool("reindex", false, "regenerate the index of every feed dir, "+
 			"not just the touched ones (use after an index-format change)")
+		indexScript := fs.String("index-script", "", "generate indexes with the official "+
+			"ipkg-make-index.sh at PATH instead of the native indexer "+
+			"(debugging/comparison; e.g. tools/ipkg-make-index.sh)")
 		if err := fs.Parse(cmdArgs); err != nil {
 			return 2
 		}
@@ -1395,7 +1469,20 @@ func Run(argv []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		return cmdBuild(cfg, *refresh, *full, *sign, *reindex, splitOnly(*only))
+		return cmdBuild(cfg, *refresh, *full, *sign, *reindex, *indexScript, splitOnly(*only))
+	case "indexdiff":
+		fs := flag.NewFlagSet("indexdiff", flag.ContinueOnError)
+		script := fs.String("script", "tools/ipkg-make-index.sh",
+			"path to the official ipkg-make-index.sh")
+		if err := fs.Parse(cmdArgs); err != nil {
+			return 2
+		}
+		cfg, err := loadConfig(config)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return cmdIndexDiff(cfg, *script)
 	case "sign":
 		cfg, err := loadConfig(config)
 		if err != nil {

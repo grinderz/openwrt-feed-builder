@@ -130,9 +130,87 @@ func buildPackagesIndex(dir string) (string, int, error) {
 	return content, len(files), nil
 }
 
+// scriptShims prepares a directory with stand-ins for the OpenWrt buildroot
+// host tools ipkg-make-index.sh depends on: an `mkhash` replacement (openssl
+// based) and, on systems with a BSD stat, a GNU-style `stat -c%s` wrapper.
+// Returns the shim dir; the caller adds it to PATH.
+func scriptShims() (string, error) {
+	dir, err := os.MkdirTemp("", "feedbuilder-shims-")
+	if err != nil {
+		return "", err
+	}
+	mkhash := `#!/bin/sh
+# minimal mkhash stand-in for ipkg-make-index.sh: mkhash <sha256|md5> <file>
+algo="$1"; file="$2"
+case "$algo" in
+sha256|md5) openssl dgst "-$algo" -r "$file" | cut -d' ' -f1 ;;
+*) echo "mkhash shim: unsupported algo '$algo'" >&2; exit 1 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "mkhash"), []byte(mkhash), 0o755); err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
+	// the script hardcodes GNU `stat -L -c%s`; BSD stat (macOS) spells that
+	// `stat -L -f%z`
+	if exec.Command("stat", "-L", "-c%s", os.DevNull).Run() != nil {
+		stat := `#!/bin/sh
+if [ "$1" = "-L" ] && [ "$2" = "-c%s" ]; then
+	exec /usr/bin/stat -L -f%z "$3"
+fi
+exec /usr/bin/stat "$@"
+`
+		if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(stat), 0o755); err != nil {
+			os.RemoveAll(dir)
+			return "", err
+		}
+	}
+	return dir, nil
+}
+
+// scriptPackagesIndex builds the `Packages` text for dir by running the
+// official OpenWrt ipkg-make-index.sh — the reference to debug/compare the
+// native indexer against. Note the script's known deviations from our native
+// index: control fields pass through unstripped, MD5Sum is absent, and
+// packages named kernel/libc are skipped.
+func scriptPackagesIndex(dir, script string) (string, int, error) {
+	absScript, err := filepath.Abs(script)
+	if err != nil {
+		return "", 0, err
+	}
+	shims, err := scriptShims()
+	if err != nil {
+		return "", 0, err
+	}
+	defer os.RemoveAll(shims)
+
+	cmd := exec.Command("bash", absScript, ".")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"PATH="+shims+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"MKHASH="+filepath.Join(shims, "mkhash"))
+	var out strings.Builder
+	cmd.Stdout = &out
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", 0, fmt.Errorf("%s %s: %w", filepath.Base(script), dir, err)
+	}
+	content := out.String()
+	return content, strings.Count("\n"+content, "\nPackage:"), nil
+}
+
 // writeIndex writes Packages and Packages.gz into dir. Returns package count.
-func writeIndex(dir string) (int, error) {
-	content, count, err := buildPackagesIndex(dir)
+// With a non-empty indexScript the index text comes from ipkg-make-index.sh
+// instead of the native generator.
+func writeIndex(dir, indexScript string) (int, error) {
+	var content string
+	var count int
+	var err error
+	if indexScript != "" {
+		content, count, err = scriptPackagesIndex(dir, indexScript)
+	} else {
+		content, count, err = buildPackagesIndex(dir)
+	}
 	if err != nil {
 		return 0, err
 	}

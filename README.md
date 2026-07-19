@@ -35,7 +35,8 @@ Single static binary. Dependencies: `gopkg.in/yaml.v3`, `github.com/ulikunitz/xz
 ## Use
 
 ```sh
-./openwrt-feed-builder -c config.yaml build [--refresh] [--full] [--sign] [--only TYPE_OR_NAME[,...]]
+./openwrt-feed-builder -c config.yaml build [--refresh] [--full] [--sign] [--reindex] [--index-script PATH] [--only TYPE_OR_NAME[,...]]
+./openwrt-feed-builder -c config.yaml indexdiff [--script tools/ipkg-make-index.sh]
 ./openwrt-feed-builder -c config.yaml sign     # (re)sign an existing tree in place
 ./openwrt-feed-builder -c config.yaml verify   # validate every signature + repo.pub
 ./openwrt-feed-builder -c config.yaml howto    # print how to add the feed on a router
@@ -62,6 +63,21 @@ stay until a `--full` build rebuilds the tree from scratch (staged +
 atomically swapped). Cached downloads are validated against the metadata the source exposes
 and re-fetched on mismatch. `--only` limits the run to matching sources;
 combined with the incremental default the rest of the feed stays as-is.
+`--reindex` regenerates the index of every feed dir, not just the touched
+ones — use after an index-format change.
+
+The `Packages` indexes are normally generated natively. For debugging there
+are two escape hatches built on the official OpenWrt generator (vendored
+verbatim from the `openwrt-24.10` branch as `tools/ipkg-make-index.sh`; the
+builder shims its `mkhash` / GNU `stat` host-tool dependencies, so it runs on
+macOS too): `build --index-script tools/ipkg-make-index.sh` builds the tree
+with the official script instead, and `indexdiff` regenerates every index
+both ways in memory and prints a unified diff per feed dir (disk untouched).
+Expected deviations of the script: control fields pass through unstripped
+(`Source*`, `Maintainer` — the native indexer drops them because opkg's
+prefix-matching parser corrupts its package blob on `SourceName` /
+`SourceDateEpoch`), no `MD5Sum`, and packages named `kernel` / `libc` are
+skipped.
 
 How a cached download / build is considered up to date, per source type:
 
