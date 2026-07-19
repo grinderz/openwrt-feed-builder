@@ -440,6 +440,28 @@ func TestInsertIndexFields(t *testing.T) {
 	}
 }
 
+func TestStripIndexFields(t *testing.T) {
+	// SourceName / SourceDateEpoch parse as a repeated Source field on the
+	// router (opkg matches field names by prefix) and corrupt opkg's blob
+	// buffer, so none of the Source* fields may reach the index.
+	control := "Package: kmod-x\n" +
+		"Version: 1.0\n" +
+		"Source: feeds/base/kmod-x\n" +
+		"SourceName: kmod-x\n" +
+		"Maintainer: Some One\n" +
+		" continued maintainer line\n" +
+		"Section: kernel\n" +
+		"SourceDateEpoch: 1779897308\n" +
+		"Description:  first line\n second line\n"
+	want := "Package: kmod-x\n" +
+		"Version: 1.0\n" +
+		"Section: kernel\n" +
+		"Description:  first line\n second line\n"
+	if got := stripIndexFields(control); got != want {
+		t.Errorf("got:\n%q\nwant:\n%q", got, want)
+	}
+}
+
 func TestUpxOptions(t *testing.T) {
 	cases := []struct {
 		val     any

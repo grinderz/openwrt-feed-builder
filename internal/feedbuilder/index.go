@@ -40,6 +40,40 @@ func ipkFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
+// strippedIndexFields are control fields dropped from the Packages index,
+// matching the official buildbot indexes. opkg's index parser matches field
+// names by prefix, so SourceName / SourceDateEpoch all parse as a repeated
+// Source field; re-setting a field with a longer value overflows the slot in
+// opkg's per-package blob buffer ("ERROR: truncating field ...") and corrupts
+// the fields that follow it — Description then reads someone else's string.
+var strippedIndexFields = []string{"Source:", "SourceName:", "SourceDateEpoch:", "Maintainer:"}
+
+// stripIndexFields removes control fields that must not reach the index,
+// including any continuation lines that belong to them.
+func stripIndexFields(control string) string {
+	var out []string
+	skipping := false
+	for line := range strings.SplitSeq(strings.TrimRight(control, "\n"), "\n") {
+		if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+			if !skipping {
+				out = append(out, line)
+			}
+			continue
+		}
+		skipping = false
+		for _, f := range strippedIndexFields {
+			if strings.HasPrefix(line, f) {
+				skipping = true
+				break
+			}
+		}
+		if !skipping {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n") + "\n"
+}
+
 // insertIndexFields places the index-only fields before the Description
 // field, matching the official ipkg-make-index.sh. opkg's index parser
 // drops fields that follow a multi-line Description, so appending them at
@@ -58,9 +92,10 @@ func insertIndexFields(control, fields string) string {
 
 // buildPackagesIndex builds the text of a `Packages` index for every .ipk in dir.
 //
-// For each package we keep its original control block verbatim (so multi-line
-// Description fields and any custom fields survive) and insert the index-only
-// fields opkg needs (Filename, Size, MD5Sum, SHA256sum) before Description.
+// For each package we keep its control block (minus strippedIndexFields, so
+// multi-line Description fields and any custom fields survive) and insert the
+// index-only fields opkg needs (Filename, Size, MD5Sum, SHA256sum) before
+// Description.
 func buildPackagesIndex(dir string) (string, int, error) {
 	files, err := ipkFiles(dir)
 	if err != nil {
@@ -81,10 +116,15 @@ func buildPackagesIndex(dir string) (string, int, error) {
 			fmt.Sprintf("Size: %d\n", len(data)) +
 			fmt.Sprintf("MD5Sum: %x\n", md5.Sum(data)) +
 			fmt.Sprintf("SHA256sum: %x\n", sha256.Sum256(data))
-		stanzas = append(stanzas, insertIndexFields(control, fields))
+		stanzas = append(stanzas, insertIndexFields(stripIndexFields(control), fields))
 	}
-	content := strings.Join(stanzas, "\n") // blank line between stanzas
-	if content != "" && !strings.HasSuffix(content, "\n") {
+	// Every stanza — including the last — must be terminated by a blank line,
+	// like the official indexes: opkg only commits the pending Description of
+	// a stanza when it sees the blank line, so a file ending right after the
+	// last Description leaks that description onto the first package of the
+	// next feed parsed.
+	content := strings.Join(stanzas, "\n")
+	if content != "" {
 		content += "\n"
 	}
 	return content, len(files), nil

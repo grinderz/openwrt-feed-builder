@@ -253,7 +253,7 @@ func sourceRelease(layout Layout, src Source, resolvedTag, name string) string {
 	return ""
 }
 
-func cmdBuild(cfg *Config, refresh, full, sign bool, only []string) int {
+func cmdBuild(cfg *Config, refresh, full, sign, reindex bool, only []string) int {
 	client := newClient()
 	cache, err := newCache(cfg.CacheDir, client, refresh)
 	if err != nil {
@@ -629,6 +629,20 @@ func cmdBuild(cfg *Config, refresh, full, sign bool, only []string) int {
 				return 1
 			}
 		}
+	}
+
+	// --reindex: regenerate the index of every existing feed dir, not just the
+	// touched ones — needed when the index format itself changes.
+	if reindex {
+		filepath.WalkDir(buildDir, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			if strings.HasSuffix(d.Name(), ".ipk") {
+				leafDirs[filepath.Dir(path)] = true
+			}
+			return nil
+		})
 	}
 
 	leaves := sortedKeys(leafDirs)
@@ -1310,7 +1324,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `feedbuilder — collect .ipk packages from HTTP sources and build a signed opkg custom feed.
 
 usage:
-  feedbuilder [-c config.yaml] build [--refresh] [--full] [--sign] [--only TYPE_OR_NAME[,...]]
+  feedbuilder [-c config.yaml] build [--refresh] [--full] [--sign] [--reindex] [--only TYPE_OR_NAME[,...]]
   feedbuilder [-c config.yaml] sign
   feedbuilder [-c config.yaml] verify
   feedbuilder [-c config.yaml] howto
@@ -1371,6 +1385,8 @@ func Run(argv []string) int {
 			"(comma-separated globs, e.g. \"sdk\" or \"amnezia*,ssclash\")")
 		sign := fs.Bool("sign", false, "sign the touched indexes while building "+
 			"(default off; the `sign` command signs the whole tree afterwards)")
+		reindex := fs.Bool("reindex", false, "regenerate the index of every feed dir, "+
+			"not just the touched ones (use after an index-format change)")
 		if err := fs.Parse(cmdArgs); err != nil {
 			return 2
 		}
@@ -1379,7 +1395,7 @@ func Run(argv []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		return cmdBuild(cfg, *refresh, *full, *sign, splitOnly(*only))
+		return cmdBuild(cfg, *refresh, *full, *sign, *reindex, splitOnly(*only))
 	case "sign":
 		cfg, err := loadConfig(config)
 		if err != nil {
