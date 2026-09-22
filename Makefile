@@ -44,6 +44,51 @@ test: ## Run tests
 	go test ./...
 
 
+##@ Lint Targets
+
+
+# pinned; `go run` fetches the exact version on demand
+GOLANGCI_LINT_VERSION ?= 2.13.2
+GOLANGCI_LINT ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(GOLANGCI_LINT_VERSION)
+GOLANGCI_LINT_TIMEOUT ?= 10m
+PRE_COMMIT_VERSION ?= 4.6
+PRE_COMMIT ?= uvx pre-commit@$(PRE_COMMIT_VERSION)
+# tools/ipkg-make-index.sh is vendored verbatim from OpenWrt: not ours to lint
+SHELLCHECK_EXCLUDE := -path ./.git -o -path ./tools -o -path ./.cache -o -path ./releases
+ARGS ?=
+
+.PHONY: lint
+lint: lint.golangci lint.shellcheck lint.pre-commit ## Run all linters
+
+.PHONY: lint.golangci
+lint.golangci: ## Run golangci-lint (ARGS=... for extra flags)
+	$(GOLANGCI_LINT) run --timeout=$(GOLANGCI_LINT_TIMEOUT) --show-stats $(ARGS)
+
+.PHONY: lint.fix
+lint.fix: ## Run golangci-lint with --fix
+	$(GOLANGCI_LINT) run --timeout=$(GOLANGCI_LINT_TIMEOUT) --fix --show-stats $(ARGS)
+
+.PHONY: lint.shellcheck
+lint.shellcheck: ## Run shellcheck on the repo's shell scripts
+	find . -type d \( $(SHELLCHECK_EXCLUDE) \) -prune -o -type f -name '*.sh' \
+		-exec shellcheck --format=gcc -s bash {} +
+
+.PHONY: lint.pre-commit
+lint.pre-commit: ## Run the pre-commit hooks on every file
+	$(PRE_COMMIT) run --all-files
+
+# formatter chain; the module prefix is spelled out for gci and gofumpt (a
+# dotless module name would otherwise pass for a std import)
+GO_MOD_ID := openwrt-feed-builder
+
+.PHONY: go.format
+go.format: ## Format the source code (golines, gofumpt, goimports, gci)
+	go run github.com/segmentio/golines@latest --max-len=120 --no-reformat-tags --ignore-generated --write-output .
+	go run mvdan.cc/gofumpt@latest -l -w -modpath $(GO_MOD_ID) .
+	go run golang.org/x/tools/cmd/goimports@latest -l -w .
+	go run github.com/daixiang0/gci@latest write --skip-generated -s standard -s default -s 'prefix($(GO_MOD_ID))' .
+
+
 ##@ Feed Targets
 
 
@@ -57,7 +102,7 @@ feed: ## Build the feed (incremental, unsigned; flags via FEED_ARGS)
 	$(FEEDBUILDER) -c $(FEED_CONFIG) build $(FEED_ARGS)
 
 .PHONY: sign
-sign: ## Sign the feed tree in place (Packages.sig + repo.pub + add.sh)
+sign: ## Sign the feed tree in place (Packages.sig / packages.adb + repo keys + add.sh)
 	$(FEEDBUILDER) -c $(FEED_CONFIG) sign
 
 # verifies exactly the tree publish ships ($(PUBLISH_SRC)), not the config's
@@ -77,6 +122,10 @@ serve: ## Serve the feed over HTTP (config `serve` section)
 .PHONY: genkey
 genkey: ## Generate a usign keypair into keys/
 	$(FEEDBUILDER) genkey
+
+.PHONY: genkey.apk
+genkey.apk: ## Generate the apk (OpenWrt 25.12+) EC keypair into keys/
+	$(FEEDBUILDER) genkey --apk
 
 
 ##@ Deploy Targets

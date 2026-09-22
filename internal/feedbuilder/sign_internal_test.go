@@ -7,7 +7,9 @@ import (
 )
 
 func TestStageSecretKey(t *testing.T) {
-	path, cleanup, err := stageSecretKey("printf 'SECRET-KEY-CONTENT'")
+	t.Parallel()
+
+	path, cleanup, err := stageSecretKey(t.Context(), "printf 'SECRET-KEY-CONTENT'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -17,6 +19,7 @@ func TestStageSecretKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("staged key unreadable: %v", err)
 	}
+
 	if got := string(data); got != "SECRET-KEY-CONTENT\n" {
 		t.Errorf("staged key = %q, want the command output with a trailing newline", got)
 	}
@@ -26,6 +29,7 @@ func TestStageSecretKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("staged key mode = %o, want 600", perm)
 	}
@@ -38,16 +42,20 @@ func TestStageSecretKey(t *testing.T) {
 	}
 
 	cleanup()
+
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("cleanup did not remove the staged key")
 	}
 }
 
 func TestStageSecretKeyFailures(t *testing.T) {
-	if _, _, err := stageSecretKey("exit 3"); err == nil {
+	t.Parallel()
+
+	if _, _, err := stageSecretKey(t.Context(), "exit 3"); err == nil {
 		t.Error("expected error when the command exits non-zero")
 	}
-	if _, _, err := stageSecretKey("true"); err == nil {
+
+	if _, _, err := stageSecretKey(t.Context(), "true"); err == nil {
 		t.Error("expected error when the command produces no output")
 	}
 }

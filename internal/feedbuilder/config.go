@@ -21,13 +21,14 @@ func (s Source) str(key string) (string, bool) {
 	if !ok || v == nil {
 		return "", false
 	}
-	switch t := v.(type) {
+
+	switch typed := v.(type) {
 	case string:
-		return t, true
+		return typed, true
 	case fmt.Stringer:
-		return t.String(), true
+		return typed.String(), true
 	default:
-		return fmt.Sprintf("%v", t), true
+		return fmt.Sprintf("%v", typed), true
 	}
 }
 
@@ -35,6 +36,7 @@ func (s Source) strOr(key, def string) string {
 	if v, ok := s.str(key); ok {
 		return v
 	}
+
 	return def
 }
 
@@ -42,7 +44,7 @@ func (s Source) strOr(key, def string) string {
 // true/false as bool and leaves YAML 1.1 spellings (yes/no/on/off) as strings,
 // so those are accepted here too — silently ignoring `enabled: no` would leave
 // a source the user disabled still enabled.
-func yamlBool(v any) (value, ok bool) {
+func yamlBool(v any) (bool, bool) {
 	switch t := v.(type) {
 	case bool:
 		return t, true
@@ -54,6 +56,7 @@ func yamlBool(v any) (value, ok bool) {
 			return false, true
 		}
 	}
+
 	return false, false
 }
 
@@ -64,9 +67,11 @@ func (s Source) boolOr(key string, def bool) bool {
 	if !ok || v == nil {
 		return def
 	}
+
 	if b, ok := yamlBool(v); ok {
 		return b
 	}
+
 	return def
 }
 
@@ -75,10 +80,12 @@ func (s Source) strSlice(key string) []string {
 	if !ok || v == nil {
 		return nil
 	}
+
 	list, ok := v.([]any)
 	if !ok {
 		return nil
 	}
+
 	out := make([]string, 0, len(list))
 	for _, item := range list {
 		if str, ok := item.(string); ok {
@@ -87,15 +94,21 @@ func (s Source) strSlice(key string) []string {
 			out = append(out, fmt.Sprintf("%v", item))
 		}
 	}
+
 	return out
 }
 
-// SignConfig holds usign signing settings.
+// SignConfig holds the signing settings: usign keys for opkg feeds (24.10
+// and older), an ECDSA P-256 PEM keypair for apk feeds (25.12+).
 type SignConfig struct {
 	Enabled      bool
 	SecretKey    string // resolved path or ""
 	SecretKeyCmd string // shell command that prints the secret key, or ""
 	PublicKey    string // resolved path or ""
+
+	APKSecretKey    string // resolved path or ""
+	APKSecretKeyCmd string // shell command that prints the apk secret key, or ""
+	APKPublicKey    string // resolved path or ""
 }
 
 // ServeConfig holds the local HTTP server settings.
@@ -116,34 +129,38 @@ type Config struct {
 	Sign          SignConfig
 	Serve         ServeConfig
 	BaseURL       string
-	FeedPrefix    string // opkg feed-name prefix, e.g. "custom" -> custom_<arch>
+	FeedPrefix    string  // opkg feed-name prefix, e.g. "custom" -> custom_<arch>
+	APKTool       apkTool // apk-tools v3 binary for 25.12+ branches
 }
 
-func asString(v any, def string) string {
-	if v == nil {
+func asString(val any, def string) string {
+	if val == nil {
 		return def
 	}
-	if s, ok := v.(string); ok {
+
+	if s, ok := val.(string); ok {
 		return s
 	}
-	return fmt.Sprintf("%v", v)
+
+	return fmt.Sprintf("%v", val)
 }
 
 func asBool(v any, def bool) bool {
 	if b, ok := yamlBool(v); ok {
 		return b
 	}
+
 	return def
 }
 
 func asInt(v any, def int) int {
-	switch t := v.(type) {
+	switch typed := v.(type) {
 	case int:
-		return t
+		return typed
 	case int64:
-		return int(t)
+		return int(typed)
 	case float64:
-		return int(t)
+		return int(typed)
 	default:
 		return def
 	}
@@ -153,12 +170,13 @@ func asMap(v any) map[string]any {
 	if m, ok := v.(map[string]any); ok {
 		return m
 	}
+
 	return map[string]any{}
 }
 
 // asStringSlice accepts either a single scalar or a YAML list of scalars.
-func asStringSlice(v any) []string {
-	switch t := v.(type) {
+func asStringSlice(val any) []string {
+	switch t := val.(type) {
 	case nil:
 		return nil
 	case []any:
@@ -168,11 +186,13 @@ func asStringSlice(v any) []string {
 				out = append(out, s)
 			}
 		}
+
 		return out
 	default:
-		if s := asString(v, ""); s != "" {
+		if s := asString(val, ""); s != "" {
 			return []string{s}
 		}
+
 		return nil
 	}
 }
@@ -180,114 +200,66 @@ func asStringSlice(v any) []string {
 // releaseRE matches a 3-part point release, e.g. "24.10.7".
 var releaseRE = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
-// loadConfig reads, resolves and validates config.yaml.
-func loadConfig(path string) (*Config, error) {
+// defaultServePort is the `serve` port when the config sets none.
+const defaultServePort = 8080
+
+// LoadConfig reads, resolves and validates the YAML config at path.
+func LoadConfig(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read: %w", err)
 	}
+
 	var data map[string]any
 	if err := yaml.Unmarshal(raw, &data); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse YAML: %w", err)
 	}
+
 	if data == nil {
 		data = map[string]any{}
 	}
 
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolve path: %w", err)
 	}
+
 	base := filepath.Dir(abs)
-	resolve := func(p string) string {
-		if p == "" {
+	resolve := func(path string) string {
+		if path == "" {
 			return ""
 		}
-		if filepath.IsAbs(p) {
-			return p
+
+		if filepath.IsAbs(path) {
+			return path
 		}
-		return filepath.Join(base, p)
+
+		return filepath.Join(base, path)
 	}
 
-	rawSources, _ := data["sources"].([]any)
-	if len(rawSources) == 0 {
-		return nil, fmt.Errorf("config has no 'sources'")
-	}
-	sources := make([]Source, 0, len(rawSources))
-	for i, item := range rawSources {
-		m, ok := item.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("source #%d is not a mapping", i)
-		}
-		if _, has := m["type"]; !has {
-			return nil, fmt.Errorf("source #%d is missing 'type'", i)
-		}
-		sources = append(sources, Source(m))
+	sources, err := parseSources(data["sources"])
+	if err != nil {
+		return nil, err
 	}
 
-	signRaw := asMap(data["sign"])
-	sign := SignConfig{
-		Enabled:      asBool(signRaw["enabled"], false),
-		SecretKey:    resolve(asString(signRaw["secret_key"], "")),
-		SecretKeyCmd: asString(signRaw["secret_key_cmd"], ""),
-		PublicKey:    resolve(asString(signRaw["public_key"], "")),
-	}
-	if sign.Enabled && sign.SecretKey == "" && sign.SecretKeyCmd == "" {
-		return nil, fmt.Errorf("sign.enabled is true but neither sign.secret_key " +
-			"nor sign.secret_key_cmd is set")
-	}
-	if sign.SecretKey != "" && sign.SecretKeyCmd != "" {
-		return nil, fmt.Errorf("set only one of sign.secret_key or sign.secret_key_cmd")
+	sign, err := parseSign(asMap(data["sign"]), resolve)
+	if err != nil {
+		return nil, err
 	}
 
 	serveRaw := asMap(data["serve"])
 	serve := ServeConfig{
 		Host: asString(serveRaw["host"], "0.0.0.0"),
-		Port: asInt(serveRaw["port"], 8080),
+		Port: asInt(serveRaw["port"], defaultServePort),
 	}
 
-	layoutRaw := asMap(data["layout"])
-	layout := Layout{
-		Versions:    asStringSlice(layoutRaw["version"]),
-		DefaultFeed: asString(layoutRaw["default_feed"], "packages"),
-		KmodVersion: asString(layoutRaw["kmod_version"], ""),
-	}
-	if style := asString(layoutRaw["style"], ""); style != "" && style != "official" {
-		return nil, fmt.Errorf("layout.style %q is no longer supported; the layout always "+
-			"mirrors downloads.openwrt.org/releases/ (drop the 'style' key)", style)
-	}
-	if len(layout.Versions) == 0 {
-		return nil, fmt.Errorf("layout.version is required — one or more point releases, " +
-			"e.g. \"24.10.7\" or [\"24.10.6\", \"24.10.7\"]")
-	}
-	for _, v := range layout.Versions {
-		if !releaseRE.MatchString(v) {
-			return nil, fmt.Errorf("layout.version entries must be a 3-part point release "+
-				"like \"24.10.7\", got %q", v)
-		}
-		branch := v[:strings.LastIndex(v, ".")]
-		if layout.Branch == "" {
-			layout.Branch = branch
-		} else if layout.Branch != branch {
-			return nil, fmt.Errorf("layout.version entries must share one branch: "+
-				"%q vs %q.x", v, layout.Branch)
-		}
+	layout, err := parseLayout(asMap(data["layout"]))
+	if err != nil {
+		return nil, err
 	}
 
-	var architectures []string
-	if list, ok := data["architectures"].([]any); ok {
-		for _, item := range list {
-			architectures = append(architectures, asString(item, ""))
-		}
-	}
-
-	var targets []string
-	if list, ok := data["targets"].([]any); ok {
-		for _, item := range list {
-			if t := strings.Trim(asString(item, ""), "/"); t != "" {
-				targets = append(targets, t)
-			}
-		}
+	if err := checkSignKeys(sign, layout); err != nil {
+		return nil, err
 	}
 
 	return &Config{
@@ -295,16 +267,144 @@ func loadConfig(path string) (*Config, error) {
 		OutputDir:     resolve(asString(data["output_dir"], "./releases")),
 		CacheDir:      resolve(asString(data["cache_dir"], "./.cache")),
 		Sources:       sources,
-		Architectures: architectures,
-		Targets:       targets,
+		Architectures: parseArchitectures(data["architectures"]),
+		Targets:       parseTargets(data["targets"]),
 		Layout:        layout,
 		Sign:          sign,
 		Serve:         serve,
 		BaseURL:       strings.TrimRight(asString(data["base_url"], ""), "/"),
 		FeedPrefix:    feedPrefixRE.ReplaceAllString(asString(data["feed_prefix"], "custom"), "_"),
+		APKTool:       apkTool(asString(data["apk_tool"], "apk")),
 	}, nil
 }
 
 // feedPrefixRE sanitizes the configured feed prefix to the characters opkg
 // accepts in a feed name (it becomes part of custom_<arch> style labels).
 var feedPrefixRE = regexp.MustCompile(`[^A-Za-z0-9_-]`)
+
+// parseSources validates the `sources:` list: every entry a mapping with a type.
+func parseSources(raw any) ([]Source, error) {
+	rawSources, _ := raw.([]any)
+	if len(rawSources) == 0 {
+		return nil, fmt.Errorf("%w has no 'sources'", errConfig)
+	}
+
+	sources := make([]Source, 0, len(rawSources))
+	for idx, item := range rawSources {
+		mapping, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%w: source #%d is not a mapping", errConfig, idx)
+		}
+
+		if _, has := mapping["type"]; !has {
+			return nil, fmt.Errorf("%w: source #%d is missing 'type'", errConfig, idx)
+		}
+
+		sources = append(sources, Source(mapping))
+	}
+
+	return sources, nil
+}
+
+// parseSign reads the `sign:` section, resolving key paths against the config dir.
+func parseSign(signRaw map[string]any, resolve func(string) string) (SignConfig, error) {
+	sign := SignConfig{
+		Enabled:         asBool(signRaw["enabled"], false),
+		SecretKey:       resolve(asString(signRaw["secret_key"], "")),
+		SecretKeyCmd:    asString(signRaw["secret_key_cmd"], ""),
+		PublicKey:       resolve(asString(signRaw["public_key"], "")),
+		APKSecretKey:    resolve(asString(signRaw["apk_secret_key"], "")),
+		APKSecretKeyCmd: asString(signRaw["apk_secret_key_cmd"], ""),
+		APKPublicKey:    resolve(asString(signRaw["apk_public_key"], "")),
+	}
+	if sign.SecretKey != "" && sign.SecretKeyCmd != "" {
+		return sign, fmt.Errorf("%w: set only one of sign.secret_key or sign.secret_key_cmd", errConfig)
+	}
+
+	if sign.APKSecretKey != "" && sign.APKSecretKeyCmd != "" {
+		return sign, fmt.Errorf("%w: set only one of sign.apk_secret_key or sign.apk_secret_key_cmd", errConfig)
+	}
+
+	return sign, nil
+}
+
+// parseLayout reads and validates the `layout:` section.
+func parseLayout(layoutRaw map[string]any) (Layout, error) {
+	layout := Layout{
+		Versions:    asStringSlice(layoutRaw["version"]),
+		DefaultFeed: asString(layoutRaw["default_feed"], "packages"),
+		KmodVersion: asString(layoutRaw["kmod_version"], ""),
+	}
+	if style := asString(layoutRaw["style"], ""); style != "" && style != "official" {
+		return layout, fmt.Errorf("%w: layout.style %q is no longer supported; the layout always "+
+			"mirrors downloads.openwrt.org/releases/ (drop the 'style' key)", errConfig, style)
+	}
+
+	if len(layout.Versions) == 0 {
+		return layout, fmt.Errorf("%w: layout.version is required — one or more point releases, "+
+			"e.g. \"24.10.7\" or [\"24.10.6\", \"24.10.7\"]", errConfig)
+	}
+
+	for _, v := range layout.Versions {
+		if !releaseRE.MatchString(v) {
+			return layout, fmt.Errorf("%w: layout.version entries must be a 3-part point release "+
+				"like \"24.10.7\", got %q", errConfig, v)
+		}
+	}
+
+	if layout.KmodVersion != "" && !releaseRE.MatchString(layout.KmodVersion) {
+		return layout, fmt.Errorf("%w: layout.kmod_version must be a 3-part point release "+
+			"like \"24.10.7\", got %q", errConfig, layout.KmodVersion)
+	}
+
+	return layout, nil
+}
+
+// checkSignKeys requires a secret key per format the carried branches use
+// when signing is enabled.
+func checkSignKeys(sign SignConfig, layout Layout) error {
+	if !sign.Enabled {
+		return nil
+	}
+
+	for _, format := range layout.formats() {
+		switch {
+		case format == formatIPK && sign.SecretKey == "" && sign.SecretKeyCmd == "":
+			return fmt.Errorf("%w: sign.enabled is true but neither sign.secret_key "+
+				"nor sign.secret_key_cmd is set (usign key for the opkg branches)", errConfig)
+		case format == formatAPK && sign.APKSecretKey == "" && sign.APKSecretKeyCmd == "":
+			return fmt.Errorf("%w: sign.enabled is true but neither sign.apk_secret_key "+
+				"nor sign.apk_secret_key_cmd is set (EC key for the apk branches "+
+				"25.12+; create one with `genkey --apk`)", errConfig)
+		}
+	}
+
+	return nil
+}
+
+func parseArchitectures(raw any) []string {
+	var architectures []string
+
+	if list, ok := raw.([]any); ok {
+		for _, item := range list {
+			architectures = append(architectures, asString(item, ""))
+		}
+	}
+
+	return architectures
+}
+
+// parseTargets reads the `targets:` filter, trimming surrounding slashes.
+func parseTargets(raw any) []string {
+	var targets []string
+
+	if list, ok := raw.([]any); ok {
+		for _, item := range list {
+			if t := strings.Trim(asString(item, ""), "/"); t != "" {
+				targets = append(targets, t)
+			}
+		}
+	}
+
+	return targets
+}

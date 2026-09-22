@@ -1,0 +1,39 @@
+# Based on the alexkaratarakis/gitattributes Go template, trimmed to what
+# this repo holds.
+
+# Auto detect text files and perform LF normalization
+*          text=auto
+
+# Documents
+*.md       text diff=markdown
+*.txt      text
+
+# Scripts
+*.sh       text eol=lf
+
+# Serialisation
+*.json     text
+*.yaml     text
+*.yml      text
+
+# Packages, indexes, archives (test fixtures)
+*.apk      binary
+*.adb      binary
+*.ipk      binary
+*.gz       binary
+*.tar      binary
+
+# Go files: no line-ending magic
+*.go       -text diff=golang
+go.mod     text eol=lf
+go.sum     text eol=lf
+
+# Dotfiles and build files
+.editorconfig           text
+.gitattributes          text
+.gitignore              text
+.golangci.yml           text
+.pre-commit-config.yaml text
+Makefile                text
+*.mk                    text
+*.mk.example            text

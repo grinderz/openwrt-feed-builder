@@ -1,9 +1,10 @@
 # openwrt-feed-builder example configuration
 #
-# Builds an opkg custom feed (OpenWrt 24.10 / opkg layout) from several HTTP
-# sources. The output tree mirrors downloads.openwrt.org/releases/ (see the
-# layout section below); every feed directory gets its own Packages /
-# Packages.gz (and Packages.sig when signing is enabled).
+# Builds an OpenWrt custom feed from several HTTP sources: opkg (.ipk,
+# Packages / Packages.gz / Packages.sig) for 24.10 and older branches, apk
+# (.apk, signed packages.adb) for 25.12 and newer — several branches side by
+# side. The output tree mirrors downloads.openwrt.org/releases/ (see the
+# layout section below).
 
 output_dir: ./releases        # generated feed goes here (the default); builds merge
                               # into it incrementally, --full recreates it
@@ -14,8 +15,15 @@ cache_dir: ./.cache         # raw downloads are cached here between runs
 base_url: ""                # e.g. https://openwrt.example.com/packages
 
 # opkg feed-name prefix used in the generated add.sh and the src/gz lines,
-# e.g. "custom" -> "custom_mipsel_24kc". Defaults to "custom".
+# e.g. "custom" -> "custom_mipsel_24kc". Defaults to "custom". On apk routers
+# (25.12+) it names the installed key: /etc/apk/keys/<prefix>.pem.
 feed_prefix: custom
+
+# apk-tools v3 binary, needed only when layout.version has a 25.12+ release
+# (index, signing, verify, .apk packaging of binary sources — the latter also
+# needs fakeroot). Default: "apk" on PATH. Arch: pacman -S apk-tools; or an
+# OpenWrt 25.12 SDK's staging_dir/host/bin/apk.
+# apk_tool: apk
 
 # Optional: only keep packages for these architectures (plus 'all').
 # Leave empty to keep every architecture encountered.
@@ -52,13 +60,16 @@ targets: ["ramips/mt7621", "mediatek/filogic"]
 #        release-bound packages with no detectable target fall back
 #        to packages-<branch>/ (may collide there, kept first).
 layout:
-  # Point releases the feed carries — one or a list, each 3-part and all on one
-  # branch. Required. Release tags on sources are only used for routing when
-  # they match one of these.
+  # Point releases the feed carries — one or a list, each 3-part. Required.
+  # Releases may span branches: each branch gets its own packages-<branch>/
+  # tree in its own format (opkg up to 24.10, apk from 25.12). Release tags on
+  # sources are only used for routing when they match one of these.
   version: ["24.10.6", "24.10.7"]
+  # version: ["24.10.8", "25.12.5"]   # opkg + apk feeds in one tree
   default_feed: packages
   # kmod_version: "24.10.7" # fallback release for kmods from sources without a
-                            # release tag (default: newest of the version list)
+                            # release tag, on its branch (default: newest listed
+                            # release of the package's branch)
   #
   # The target/subtarget is read from the asset file name
   # (<pkg>_<ver>_<arch>_<target>_<subtarget>); a per-source
@@ -69,6 +80,10 @@ layout:
   #   - a github source's release tag is used automatically when it matches one
   #     of the layout.version entries (tag v24.10.7 -> 24.10.7);
   #   - `kmod_version: "24.10.7"` on any source sets it explicitly.
+  #
+  # With several branches, a package goes to the branch of its source's
+  # release (above), else to the source's `openwrt: "25.12"` pin, else to
+  # every branch of its format (.ipk -> opkg branches, .apk -> apk branches).
   # One installer script is generated per listed release (<release>/add.sh),
   # each pinned to its release; run the one matching the router.
 
@@ -80,6 +95,11 @@ sign:
   # is the key). Handy with a password manager; the key is written to a private
   # temp file only for the duration of the build. Set EITHER this OR secret_key.
   #   secret_key_cmd: "pass show openwrt/feed-secret-key"
+  #
+  # apk branches (25.12+) sign with an ECDSA P-256 PEM key instead of usign:
+  #   openwrt-feed-builder genkey --apk
+  # apk_secret_key: ./keys/apk-private.pem   # or apk_secret_key_cmd: "..."
+  # apk_public_key: ./keys/apk-public.pem    # served as repo-apk.pem
 
 serve:
   host: 0.0.0.0
@@ -89,6 +109,10 @@ sources:
   # Each source is best-effort: if one fails (404, timeout, rate limit, bad
   # config) it is skipped with a warning and the build continues with the rest.
   # Set `enabled: false` on any source to skip it without deleting it.
+  # `openwrt: "25.12"` pins a source to one branch when layout.version spans
+  # several (otherwise .ipk files go to the opkg branches, .apk to the apk
+  # ones). File patterns default to the formats the branches need: *.ipk,
+  # *.apk or *.[ai]pk.
   # The placeholder examples below use fake hosts, so they are disabled; the two
   # real ones (the OpenWrt luci feed and the gSpotx2f GitHub directory) are on.
 
@@ -103,7 +127,8 @@ sources:
       - https://example.com/packages/bar_*_all.ipk        # -> newest bar_<ver>_all.ipk
       - https://example.com/packages/foo_1.0-1_x86_64.ipk  # exact URL, no wildcard
 
-  # 2) Mirror selected packages from an existing opkg feed (parses Packages.gz).
+  # 2) Mirror selected packages from an existing feed (parses Packages.gz, or
+  #    packages.adb for 25.12+ feeds).
   - type: feed
     name: upstream-luci
     enabled: false
@@ -136,6 +161,12 @@ sources:
     url: https://github.com/gSpotx2f/packages-openwrt/tree/master/24.10/*.ipk
     #feed: myfeed       # override the feed directory name for this source
 
+  # 5b) The same repo's 25.12 directory ships .apk packages.
+  - type: github_dir
+    name: gspotx2f-2512
+    enabled: false
+    url: https://github.com/gSpotx2f/packages-openwrt/tree/master/25.12/*.apk
+
   # 6) GitHub releases whose assets embed the target/subtarget in the file name
   #    (<pkg>_<ver>_<arch>_<target>_<subtarget>.ipk); the target/subtarget is
   #    detected automatically and used in the output path.
@@ -144,6 +175,8 @@ sources:
     enabled: true
     repo: Slava-Shchipunov/awg-openwrt
     tag: v24.10.7               # single tag; or use `tags: [v24.10.6, v24.10.7]`
+                                # (with 25.12 in layout.version also e.g.
+                                # tags: [v24.10.7, v25.12.5] — .ipk / .apk assets)
     asset_match: "*.ipk"
     #feed: myfeed
 
@@ -162,9 +195,11 @@ sources:
   #   recursive: false
   #   # tip: set GITHUB_TOKEN in the environment to avoid the 60 req/h limit
 
-  # 7) Raw binary / archive repacked into a locally built .ipk — for upstreams
-  #    that ship plain binaries instead of packages. One .ipk is built per
-  #    arch_map entry (opkg architecture -> token used in the URL), each
+  # 7) Raw binary / archive repacked into a locally built package — for
+  #    upstreams that ship plain binaries instead of packages. One package is
+  #    built per arch_map entry (architecture -> token used in the URL) and
+  #    per format the branches need (.ipk; .apk for 25.12+, version
+  #    <version>-r<revision>, built with fakeroot apk mkpkg), each
   #    installing the unpacked file at `install` with `mode`. Placeholders in
   #    url / asset_match / extract / install: {version} {tag} {arch} {pkg_arch}.
   #    Example: the mihomo binary SSClash expects at /opt/clash/bin/clash.
@@ -191,7 +226,8 @@ sources:
     # provides: [clash]
     # conflicts: []
     # maintainer: you@example.com
-    # control: {License: GPL-3.0}   # extra verbatim control fields
+    # control: {License: GPL-3.0}   # extra verbatim control fields (.apk: only
+    #                               # License / URL / Origin are carried)
     # extract: "*/mihomo"     # member glob for .tar[.gz/.xz]/.tgz/.txz/.zip
     #                         # assets (single-file archives unpack implicitly;
     #                         # bare .gz/.xz are just decompressed)

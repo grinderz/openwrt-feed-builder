@@ -18,18 +18,24 @@ import (
 
 func gzipBytes(t *testing.T, data []byte) []byte {
 	t.Helper()
+
 	var buf bytes.Buffer
+
 	gw := gzip.NewWriter(&buf)
 	if _, err := gw.Write(data); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := gw.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	return buf.Bytes()
 }
 
 func TestParseMode(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		in   any
 		want int64
@@ -43,23 +49,27 @@ func TestParseMode(t *testing.T) {
 		{493, 0o755}, // yaml.v3 already octal-decoded `mode: 0755` into 493
 		{420, 0o644}, // yaml.v3 already octal-decoded `mode: 0644` into 420
 	}
-	for _, c := range cases {
-		got, err := parseMode(c.in, 0o755)
+	for _, tcase := range cases {
+		got, err := parseMode(tcase.in, 0o755)
 		if err != nil {
-			t.Fatalf("parseMode(%v): %v", c.in, err)
+			t.Fatalf("parseMode(%v): %v", tcase.in, err)
 		}
-		if got != c.want {
-			t.Errorf("parseMode(%v) = %o, want %o", c.in, got, c.want)
+
+		if got != tcase.want {
+			t.Errorf("parseMode(%v) = %o, want %o", tcase.in, got, tcase.want)
 		}
 	}
+
 	if _, err := parseMode("rwxr-xr-x", 0o755); err == nil {
 		t.Error("parseMode should reject non-octal strings")
 	}
 }
 
 func TestExpandPlaceholders(t *testing.T) {
+	t.Parallel()
+
 	got := expandPlaceholders("x-{arch}-v{version}.gz", map[string]string{
-		"arch": "arm64", "version": "1.2.3",
+		tKeyArch: tAssetArm64, tKeyVersion: tVersion123,
 	})
 	if got != "x-arm64-v1.2.3.gz" {
 		t.Errorf("got %q", got)
@@ -67,22 +77,30 @@ func TestExpandPlaceholders(t *testing.T) {
 }
 
 func TestUnpackAssetGzip(t *testing.T) {
+	t.Parallel()
+
 	payload := []byte("ELF fake binary")
+
 	out, err := unpackAsset("tool-linux-arm64-v1.gz", gzipBytes(t, payload), "")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if !bytes.Equal(out, payload) {
 		t.Errorf("payload mismatch")
 	}
 }
 
 func TestUnpackAssetRaw(t *testing.T) {
+	t.Parallel()
+
 	payload := []byte("raw binary")
+
 	out, err := unpackAsset("tool-linux-arm64", payload, "")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if !bytes.Equal(out, payload) {
 		t.Errorf("payload mismatch")
 	}
@@ -90,37 +108,48 @@ func TestUnpackAssetRaw(t *testing.T) {
 
 func tarGzArchive(t *testing.T, files map[string]string) []byte {
 	t.Helper()
+
 	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gw)
+
+	gzw := gzip.NewWriter(&buf)
+
+	tarWriter := tar.NewWriter(gzw)
 	for name, content := range files {
-		if err := tw.WriteHeader(&tar.Header{
+		if err := tarWriter.WriteHeader(&tar.Header{
 			Name: name, Mode: 0o755, Size: int64(len(content)), Typeflag: tar.TypeReg,
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tw.Write([]byte(content)); err != nil {
+
+		if _, err := tarWriter.Write([]byte(content)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := tw.Close(); err != nil {
+
+	if err := tarWriter.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := gw.Close(); err != nil {
+
+	if err := gzw.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	return buf.Bytes()
 }
 
 func TestUnpackAssetTarExtract(t *testing.T) {
+	t.Parallel()
+
 	arc := tarGzArchive(t, map[string]string{
 		"tool-v1/README.md": "docs",
 		"tool-v1/tool":      "the binary",
 	})
+
 	out, err := unpackAsset("tool.tar.gz", arc, "*/tool")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(out) != "the binary" {
 		t.Errorf("got %q", out)
 	}
@@ -131,35 +160,44 @@ func TestUnpackAssetTarExtract(t *testing.T) {
 	}
 
 	// single file unpacks implicitly
-	single := tarGzArchive(t, map[string]string{"tool": "solo"})
+	single := tarGzArchive(t, map[string]string{tKeyTool: "solo"})
+
 	out, err = unpackAsset("tool.tgz", single, "")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(out) != "solo" {
 		t.Errorf("got %q", out)
 	}
 }
 
 func TestUnpackAssetZip(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
+
+	zipWriter := zip.NewWriter(&buf)
 	for name, content := range map[string]string{"a/tool.exe": "win", "a/tool": "nix"} {
-		w, err := zw.Create(name)
+		w, err := zipWriter.Create(name)
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		if _, err := w.Write([]byte(content)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := zw.Close(); err != nil {
+
+	if err := zipWriter.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	out, err := unpackAsset("tool.zip", buf.Bytes(), "a/tool")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(out) != "nix" {
 		t.Errorf("got %q", out)
 	}
@@ -168,128 +206,154 @@ func TestUnpackAssetZip(t *testing.T) {
 // readDataTar extracts data.tar.gz members from a built ipk: name -> header.
 func readDataEntries(t *testing.T, ipkPath string) map[string]*tar.Header {
 	t.Helper()
+
 	raw, err := os.ReadFile(ipkPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	dataTar, err := extractMemberFromTar(raw, "data.tar.gz")
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr, err := openTar(dataTar)
+
+	tarReader, err := openTar(dataTar)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	out := map[string]*tar.Header{}
+
 	for {
-		hdr, err := tr.Next()
+		hdr, err := tarReader.Next()
 		if err == io.EOF {
 			break
 		}
+
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		h := *hdr
 		out[hdr.Name] = &h
 	}
+
 	return out
 }
 
 func TestBinaryPackages(t *testing.T) {
+	t.Parallel()
+
 	binaries := map[string][]byte{
-		"mipsle-softfloat": []byte("mips binary"),
-		"arm64":            []byte("arm binary"),
+		tAssetMipsle: []byte("mips binary"),
+		tAssetArm64:  []byte("arm binary"),
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+	srv := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
 		for arch, data := range binaries {
-			if strings.Contains(r.URL.Path, arch) {
-				w.Write(gzipBytes(t, data))
+			if strings.Contains(req.URL.Path, arch) {
+				_, _ = writer.Write(gzipBytes(t, data))
 				return
 			}
 		}
-		http.NotFound(w, r)
+
+		http.NotFound(writer, req)
 	}))
 	defer srv.Close()
 
 	dir := t.TempDir()
 	client := newClient()
+
 	cache, err := newCache(filepath.Join(dir, "cache"), client, false)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	cfg := &Config{
-		Architectures: []string{"mipsel_24kc", "aarch64_cortex-a53"},
-		Layout:        Layout{Versions: []string{"24.10.7"}, Branch: "24.10", DefaultFeed: "packages"},
+		Architectures: []string{tArchMipsel, tArchA53},
+		Layout:        Layout{Versions: []string{tRel24107}, DefaultFeed: tFeedPackages},
 	}
 	src := Source{
-		"type":    "binary",
-		"name":    "mihomo",
-		"version": "1.19.28",
-		"url":     srv.URL + "/v{version}/mihomo-linux-{arch}-v{version}.gz",
-		"install": "/opt/clash/bin/clash",
-		"mode":    "0755",
-		"section": "net",
-		"arch_map": map[string]any{
-			"mipsel_24kc":        "mipsle-softfloat",
-			"aarch64_cortex-a53": "arm64",
-			"x86_64":             "amd64", // filtered out by cfg.Architectures
+		tKeyType:    tTypeBinary,
+		tKeyName:    tPkgMihomo,
+		tKeyVersion: "1.19.28",
+		tKeyURL:     srv.URL + "/v{version}/mihomo-linux-{arch}-v{version}.gz",
+		tKeyInstall: "/opt/clash/bin/clash",
+		"mode":      "0755",
+		"section":   "net",
+		tKeyArchMap: map[string]any{
+			tArchMipsel: tAssetMipsle,
+			tArchA53:    tAssetArm64,
+			tArchX86:    "amd64", // filtered out by cfg.Architectures
 		},
 		"description": "mihomo binary",
 		"postinst":    "#!/bin/sh\nexit 0\n",
 	}
 
-	pkgs, err := binaryPackages(cfg, client, cache, src)
+	pkgs, err := binaryPackages(t.Context(), cfg, client, cache, src)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if len(pkgs) != 2 {
 		t.Fatalf("expected 2 packages, got %d", len(pkgs))
 	}
 
-	for _, p := range pkgs {
-		control, err := readControl(p.path)
+	for _, built := range pkgs {
+		control, err := readControl(built.path)
 		if err != nil {
-			t.Fatalf("readControl(%s): %v", p.path, err)
+			t.Fatalf("readControl(%s): %v", built.path, err)
 		}
+
 		fields := parseFields(control)
-		if fields["Package"] != "mihomo" {
-			t.Errorf("Package = %q", fields["Package"])
+		if fields[tFieldPackage] != tPkgMihomo {
+			t.Errorf("Package = %q", fields[tFieldPackage])
 		}
+
 		if fields["Version"] != "1.19.28-1" {
 			t.Errorf("Version = %q", fields["Version"])
 		}
+
 		if fields["Section"] != "net" {
 			t.Errorf("Section = %q", fields["Section"])
 		}
+
 		arch := fields["Architecture"]
+
 		wantPayload := binaries[map[string]string{
-			"mipsel_24kc": "mipsle-softfloat", "aarch64_cortex-a53": "arm64",
+			tArchMipsel: tAssetMipsle, tArchA53: tAssetArm64,
 		}[arch]]
 		if wantPayload == nil {
 			t.Fatalf("unexpected arch %q", arch)
 		}
 
-		entries := readDataEntries(t, p.path)
+		entries := readDataEntries(t, built.path)
+
 		hdr, ok := entries["./opt/clash/bin/clash"]
 		if !ok {
 			t.Fatalf("no ./opt/clash/bin/clash in data.tar.gz; members: %v", mapKeysHdr(entries))
 		}
+
 		if hdr.Mode&0o777 != 0o755 {
 			t.Errorf("mode = %o, want 0755", hdr.Mode&0o777)
 		}
+
 		if hdr.Size != int64(len(wantPayload)) {
 			t.Errorf("size = %d, want %d", hdr.Size, len(wantPayload))
 		}
+
 		if _, ok := entries["./opt/clash/bin/"]; !ok {
 			t.Error("missing parent dir entry ./opt/clash/bin/")
 		}
 
 		// postinst must land in control.tar.gz
-		raw, _ := os.ReadFile(p.path)
+		raw, _ := os.ReadFile(built.path)
+
 		controlTar, err := extractMemberFromTar(raw, "control.tar.gz")
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		if _, err := extractMemberFromTar(controlTar, "postinst"); err != nil {
 			t.Errorf("postinst missing from control.tar.gz: %v", err)
 		}
@@ -300,14 +364,17 @@ func TestBinaryPackages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkgs2, err := binaryPackages(cfg, client, cache, src)
+
+	pkgs2, err := binaryPackages(t.Context(), cfg, client, cache, src)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	after, err := os.ReadFile(pkgs2[0].path)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if !bytes.Equal(before, after) {
 		t.Error("rebuilt ipk differs; build is not deterministic")
 	}
@@ -318,48 +385,66 @@ func mapKeysHdr(m map[string]*tar.Header) []string {
 	for k := range m {
 		out = append(out, k)
 	}
+
 	return out
 }
 
 func TestBinaryPackagesValidation(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	client := newClient()
+
 	cache, err := newCache(dir, client, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := &Config{Layout: Layout{Versions: []string{"24.10.7"}, Branch: "24.10"}}
+
+	cfg := &Config{Layout: Layout{Versions: []string{tRel24107}}}
 
 	cases := []struct {
 		name string
 		src  Source
 	}{
-		{"no install", Source{"type": "binary", "name": "x", "version": "1",
-			"url": "http://e/x.gz", "arch": "all"}},
-		{"relative install", Source{"type": "binary", "name": "x", "version": "1",
-			"url": "http://e/x.gz", "install": "opt/x", "arch": "all"}},
-		{"no version or repo", Source{"type": "binary", "name": "x",
-			"url": "http://e/x.gz", "install": "/opt/x", "arch": "all"}},
-		{"no arch or arch_map", Source{"type": "binary", "name": "x", "version": "1",
-			"url": "http://e/x.gz", "install": "/opt/x"}},
-		{"no url or asset_match", Source{"type": "binary", "name": "x", "version": "1",
-			"install": "/opt/x", "arch": "all"}},
+		{"no install", Source{
+			tKeyType: tTypeBinary, tKeyName: "x", tKeyVersion: "1",
+			tKeyURL: tAssetURL, tKeyArch: tArchAll,
+		}},
+		{"relative install", Source{
+			tKeyType: tTypeBinary, tKeyName: "x", tKeyVersion: "1",
+			tKeyURL: tAssetURL, tKeyInstall: "opt/x", tKeyArch: tArchAll,
+		}},
+		{"no version or repo", Source{
+			tKeyType: tTypeBinary, tKeyName: "x",
+			tKeyURL: tAssetURL, tKeyInstall: tInstallX, tKeyArch: tArchAll,
+		}},
+		{"no arch or arch_map", Source{
+			tKeyType: tTypeBinary, tKeyName: "x", tKeyVersion: "1",
+			tKeyURL: tAssetURL, tKeyInstall: tInstallX,
+		}},
+		{"no url or asset_match", Source{
+			tKeyType: tTypeBinary, tKeyName: "x", tKeyVersion: "1",
+			tKeyInstall: tInstallX, tKeyArch: tArchAll,
+		}},
 	}
 	for _, c := range cases {
-		if _, err := binaryPackages(cfg, client, cache, c.src); err == nil {
+		if _, err := binaryPackages(t.Context(), cfg, client, cache, c.src); err == nil {
 			t.Errorf("%s: expected error", c.name)
 		}
 	}
 }
 
 func TestBinaryControlExtras(t *testing.T) {
+	t.Parallel()
+
 	src := Source{
-		"depends":     []any{"libc", "kmod-tun"},
+		"depends":     []any{tDepLibc, tDepKmodTun},
 		"maintainer":  "me",
-		"control":     map[string]any{"License": "MIT"},
+		"control":     map[string]any{"License": tLicenseMIT},
 		"description": "line1\nline2",
 	}
-	text := binaryControl(src, "pkg", "1.0-1", "all", 42)
+
+	text := binaryControl(src, "pkg", "1.0-1", tArchAll, 42)
 	for _, want := range []string{
 		"Package: pkg\n", "Version: 1.0-1\n", "Architecture: all\n",
 		"Installed-Size: 42\n", "Depends: libc, kmod-tun\n",
@@ -372,60 +457,74 @@ func TestBinaryControlExtras(t *testing.T) {
 }
 
 func TestBinaryEndToEndIndex(t *testing.T) {
+	t.Parallel()
+
 	// The built ipk must survive the real index path: buildPackagesIndex reads
 	// its control back via readControl.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(gzipBytes(t, fmt.Appendf(nil, "binary for %s", r.URL.Path)))
+		_, _ = w.Write(gzipBytes(t, fmt.Appendf(nil, "binary for %s", r.URL.Path)))
 	}))
 	defer srv.Close()
 
 	dir := t.TempDir()
 	client := newClient()
+
 	cache, err := newCache(filepath.Join(dir, "cache"), client, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := &Config{Layout: Layout{Versions: []string{"24.10.7"}, Branch: "24.10"}}
+
+	cfg := &Config{Layout: Layout{Versions: []string{tRel24107}}}
 	src := Source{
-		"type": "binary", "name": "tool", "version": "2.0",
-		"url": srv.URL + "/tool-{arch}.gz", "install": "/usr/bin/tool",
-		"arch_map": map[string]any{"x86_64": "amd64"},
+		tKeyType: tTypeBinary, tKeyName: tKeyTool, tKeyVersion: "2.0",
+		tKeyURL: srv.URL + "/tool-{arch}.gz", tKeyInstall: "/usr/bin/tool",
+		tKeyArchMap: map[string]any{tArchX86: "amd64"},
 	}
-	pkgs, err := binaryPackages(cfg, client, cache, src)
+
+	pkgs, err := binaryPackages(t.Context(), cfg, client, cache, src)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	feedDir := filepath.Join(dir, "feed")
 	if err := os.MkdirAll(feedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := copyFile(pkgs[0].path, filepath.Join(feedDir, filepath.Base(pkgs[0].path))); err != nil {
 		t.Fatal(err)
 	}
-	n, err := writeIndex(feedDir, "")
+
+	count, err := writeIndex(t.Context(), feedDir, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Fatalf("indexed %d packages, want 1", n)
+
+	if count != 1 {
+		t.Fatalf("indexed %d packages, want 1", count)
 	}
+
 	data, err := os.ReadFile(filepath.Join(feedDir, "Packages"))
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	stanzas := parseIndex(string(data))
-	if len(stanzas) != 1 || stanzas[0]["Package"] != "tool" || stanzas[0]["SHA256sum"] == "" {
+	if len(stanzas) != 1 || stanzas[0][tFieldPackage] != tKeyTool || stanzas[0]["SHA256sum"] == "" {
 		t.Errorf("bad index:\n%s", data)
 	}
 }
 
 func TestInsertIndexFields(t *testing.T) {
+	t.Parallel()
+
 	fields := "Filename: a_1.0_all.ipk\nSize: 1\n"
 
 	// opkg drops fields after a multi-line Description, so the index
 	// fields must land before it
 	control := "Package: a\nVersion: 1.0\nDescription:  first line\n second line\n"
 	got := insertIndexFields(control, fields)
+
 	want := "Package: a\nVersion: 1.0\nFilename: a_1.0_all.ipk\nSize: 1\nDescription:  first line\n second line\n"
 	if got != want {
 		t.Errorf("with description:\ngot:\n%q\nwant:\n%q", got, want)
@@ -434,6 +533,7 @@ func TestInsertIndexFields(t *testing.T) {
 	// no Description at all: fields go last
 	control = "Package: a\nVersion: 1.0\n"
 	got = insertIndexFields(control, fields)
+
 	want = "Package: a\nVersion: 1.0\nFilename: a_1.0_all.ipk\nSize: 1\n"
 	if got != want {
 		t.Errorf("without description:\ngot:\n%q\nwant:\n%q", got, want)
@@ -441,6 +541,8 @@ func TestInsertIndexFields(t *testing.T) {
 }
 
 func TestStripIndexFields(t *testing.T) {
+	t.Parallel()
+
 	// SourceName / SourceDateEpoch parse as a repeated Source field on the
 	// router (opkg matches field names by prefix) and corrupt opkg's blob
 	// buffer, so none of the Source* fields may reach the index.
@@ -453,6 +555,7 @@ func TestStripIndexFields(t *testing.T) {
 		"Section: kernel\n" +
 		"SourceDateEpoch: 1779897308\n" +
 		"Description:  first line\n second line\n"
+
 	want := "Package: kmod-x\n" +
 		"Version: 1.0\n" +
 		"Section: kernel\n" +
@@ -463,6 +566,8 @@ func TestStripIndexFields(t *testing.T) {
 }
 
 func TestUpxOptions(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		val     any
 		flags   []string
@@ -470,33 +575,110 @@ func TestUpxOptions(t *testing.T) {
 	}{
 		{nil, nil, false},
 		{false, nil, false},
-		{true, []string{"--best", "--lzma"}, true},
-		{"true", []string{"--best", "--lzma"}, true},
+		{true, []string{tUPXBest, "--lzma"}, true},
+		{"true", []string{tUPXBest, "--lzma"}, true},
 		{"false", nil, false},
 		{"", nil, false},
 		{"-9 --brute", []string{"-9", "--brute"}, true},
 	}
-	for _, c := range cases {
+	for _, tcase := range cases {
 		src := Source{}
-		if c.val != nil {
-			src["upx"] = c.val
+		if tcase.val != nil {
+			src["upx"] = tcase.val
 		}
+
 		flags, enabled := upxOptions(src)
-		if enabled != c.enabled {
-			t.Errorf("upx=%v: enabled=%v, want %v", c.val, enabled, c.enabled)
+		if enabled != tcase.enabled {
+			t.Errorf("upx=%v: enabled=%v, want %v", tcase.val, enabled, tcase.enabled)
 		}
-		if strings.Join(flags, " ") != strings.Join(c.flags, " ") {
-			t.Errorf("upx=%v: flags=%v, want %v", c.val, flags, c.flags)
+
+		if strings.Join(flags, " ") != strings.Join(tcase.flags, " ") {
+			t.Errorf("upx=%v: flags=%v, want %v", tcase.val, flags, tcase.flags)
 		}
 	}
 }
 
 func TestUpxCompressMissingBinary(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("upx"); err == nil {
 		t.Skip("upx installed; this test covers the not-installed error")
 	}
+
 	cache := &Cache{dir: t.TempDir()}
-	if _, err := upxCompress(cache, []byte("payload"), []string{"--best"}); err == nil {
+	if _, err := upxCompress(t.Context(), cache, []byte("payload"), []string{tUPXBest}); err == nil {
 		t.Fatal("expected error when upx is not in PATH")
+	}
+}
+
+// With an opkg and an apk branch carried, a binary source is packaged in both
+// formats; `openwrt:` narrows it to one.
+func TestBinaryPackagesBothFormats(t *testing.T) {
+	t.Parallel()
+
+	tool := requireAPK(t, true)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(gzipBytes(t, []byte("arm binary")))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	client := newClient()
+
+	cache, err := newCache(filepath.Join(dir, "cache"), client, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{
+		Layout:  Layout{Versions: []string{tRel24108, tRel25125}, DefaultFeed: tFeedPackages},
+		APKTool: tool,
+	}
+	src := Source{
+		tKeyType: tTypeBinary, tKeyName: tPkgMihomo, tKeyVersion: "1.19.28",
+		tKeyURL:     srv.URL + "/mihomo-{arch}.gz",
+		tKeyInstall: "/opt/clash/bin/clash",
+		tKeyArchMap: map[string]any{tArchA53: tAssetArm64},
+		"depends":   []any{tDepKmodTun},
+	}
+
+	pkgs, err := binaryPackages(t.Context(), cfg, client, cache, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	versions := map[string]string{}
+
+	for _, p := range pkgs {
+		fields, format, err := readPkgFields(p.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		versions[format] = fields["Version"]
+		if fields[tFieldDepends] != tDepKmodTun {
+			t.Errorf("%s Depends = %q", format, fields[tFieldDepends])
+		}
+	}
+
+	if versions[formatIPK] != "1.19.28-1" || versions[formatAPK] != "1.19.28-r1" {
+		t.Errorf("versions per format = %v", versions)
+	}
+
+	src["openwrt"] = tBranch25
+
+	pkgs, err = binaryPackages(t.Context(), cfg, client, cache, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pkgs) != 1 || pkgs[0].branch != tBranch25 || !strings.HasSuffix(pkgs[0].path, ".apk") {
+		t.Errorf("openwrt: 25.12 should build only the .apk, got %+v", pkgs)
+	}
+
+	src["version"] = "1.19.28-beta"
+	if _, err := binaryPackages(t.Context(), cfg, client, cache, src); err == nil {
+		t.Error("an invalid apk version must be rejected for apk branches")
 	}
 }

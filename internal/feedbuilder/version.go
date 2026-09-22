@@ -28,6 +28,7 @@ func ipkMatch(name string) (string, string, string, bool) {
 	if m == nil {
 		return "", "", "", false
 	}
+
 	return m[1], m[2], m[3], true
 }
 
@@ -36,82 +37,97 @@ func isAlpha(b byte) bool { return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= '
 
 // order returns the sort weight for one character in the non-digit comparison.
 // An empty character is represented by -1 here (end of string).
-func order(c int) int {
+// nonAlphaWeight lifts non-letters above every letter in the ordering.
+const nonAlphaWeight = 256
+
+func order(char int) int {
 	switch {
-	case c < 0:
+	case char < 0:
 		return 0
-	case c == '~':
+	case char == '~':
 		return -1
-	case isAlpha(byte(c)):
-		return c
+	case char < nonAlphaWeight && isAlpha(byte(char)):
+		return char
 	default:
-		return c + 256 // non-alphanumerics sort after letters
+		return char + nonAlphaWeight // non-alphanumerics sort after letters
 	}
 }
 
-func splitVersion(version string) (epoch int, upstream, revision string) {
+func splitVersion(version string) (int, string, string) {
+	epoch := 0
+
 	if i := strings.Index(version, ":"); i >= 0 {
 		head := version[:i]
 		version = version[i+1:]
+
 		if n, err := strconv.Atoi(head); err == nil {
 			epoch = n
 		}
 	}
+
 	if i := strings.LastIndex(version, "-"); i >= 0 {
-		upstream = version[:i]
-		revision = version[i+1:]
-	} else {
-		upstream = version
-		revision = ""
+		return epoch, version[:i], version[i+1:]
 	}
-	return epoch, upstream, revision
+
+	return epoch, version, ""
 }
 
-func cmpPart(a, b string) int {
-	i, j := 0, 0
-	la, lb := len(a), len(b)
-	for i < la || j < lb {
+func cmpPart(left, right string) int {
+	posA, posB := 0, 0
+
+	lenA, lenB := len(left), len(right)
+	for posA < lenA || posB < lenB {
 		// 1) compare a run of non-digit characters
-		for (i < la && !isDigit(a[i])) || (j < lb && !isDigit(b[j])) {
-			ca, cb := -1, -1
-			if i < la && !isDigit(a[i]) {
-				ca = int(a[i])
+		for (posA < lenA && !isDigit(left[posA])) || (posB < lenB && !isDigit(right[posB])) {
+			charA, charB := -1, -1
+			if posA < lenA && !isDigit(left[posA]) {
+				charA = int(left[posA])
 			}
-			if j < lb && !isDigit(b[j]) {
-				cb = int(b[j])
+
+			if posB < lenB && !isDigit(right[posB]) {
+				charB = int(right[posB])
 			}
-			oa, ob := order(ca), order(cb)
+
+			oa, ob := order(charA), order(charB)
 			if oa != ob {
 				if oa < ob {
 					return -1
 				}
+
 				return 1
 			}
-			if ca >= 0 {
-				i++
+
+			if charA >= 0 {
+				posA++
 			}
-			if cb >= 0 {
-				j++
+
+			if charB >= 0 {
+				posB++
 			}
 		}
 		// 2) compare a run of digits numerically
-		startA := i
-		for i < la && isDigit(a[i]) {
-			i++
+		startA := posA
+		for posA < lenA && isDigit(left[posA]) {
+			posA++
 		}
-		startB := j
-		for j < lb && isDigit(b[j]) {
-			j++
+
+		startB := posB
+		for posB < lenB && isDigit(right[posB]) {
+			posB++
 		}
-		na := atoiZero(a[startA:i])
-		nb := atoiZero(b[startB:j])
+
+		na := atoiZero(left[startA:posA])
+
+		nb := atoiZero(right[startB:posB])
 		if na != nb {
 			if na < nb {
 				return -1
 			}
+
 			return 1
 		}
 	}
+
 	return 0
 }
 
@@ -119,25 +135,31 @@ func atoiZero(s string) int {
 	if s == "" {
 		return 0
 	}
+
 	n, err := strconv.Atoi(s)
 	if err != nil {
 		return 0
 	}
+
 	return n
 }
 
 // compareVersion returns -1, 0, or 1 for version a < b, a == b, a > b.
 func compareVersion(a, b string) int {
-	ea, ua, ra := splitVersion(a)
-	eb, ub, rb := splitVersion(b)
-	if ea != eb {
-		if ea < eb {
+	epochA, upA, revA := splitVersion(a)
+
+	epochB, upB, revB := splitVersion(b)
+	if epochA != epochB {
+		if epochA < epochB {
 			return -1
 		}
+
 		return 1
 	}
-	if c := cmpPart(ua, ub); c != 0 {
+
+	if c := cmpPart(upA, upB); c != 0 {
 		return c
 	}
-	return cmpPart(ra, rb)
+
+	return cmpPart(revA, revB)
 }

@@ -1,0 +1,137 @@
+version: "2"
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+linters:
+  default: all
+  disable:
+    - depguard
+    - exhaustruct
+    - exhaustruct_v5 # exhaustruct's name since golangci-lint 2.13
+    - forbidigo # a CLI prints with fmt.Print*
+    - godox
+    - gomodguard # deprecated since v2.12.0, replaced by gomodguard_v2
+    - nlreturn
+    - noinlineerr
+    - wsl
+  settings:
+    cyclop:
+      max-complexity: 30
+    dupl:
+      threshold: 250
+    funlen:
+      lines: 150
+      statements: 60 # default 40
+    gocognit:
+      min-complexity: 50
+    nestif:
+      min-complexity: 8 # default 5
+    gomoddirectives:
+      replace-local: true
+    interfacebloat:
+      max: 10
+    ireturn:
+      allow:
+        - error
+        - empty
+        - stdlib
+        - anon
+        - generic
+    lll:
+      line-length: 120
+    mnd:
+      ignored-numbers:
+        - "1000000"
+    tagalign:
+      align: true
+      sort: true
+      order:
+        - json
+        - yaml
+        - yml
+        - toml
+        - env
+        - env-prefix
+        - env-default
+        - env-required
+        - env-description
+    tagliatelle:
+      case:
+        rules:
+          json: snake
+          yaml: camel
+        use-field-name: true
+    varnamelen:
+      ignore-names:
+        - err
+        - ok
+        - id
+        - fn
+      ignore-decls:
+        - wg *sync.WaitGroup
+        - wg sync.WaitGroup
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - .Wrap(
+        - .Wrapf(
+        - .WithMessage(
+        - .WithMessagef(
+        - .WithStack(
+        - golang.org/x/sync/errgroup.Group).Wait()
+      ignore-package-globs:
+        - openwrt-feed-builder/*
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+    rules:
+      # the add.sh templates are shell (`fi`, `done`, long sed lines): an
+      # autofix would break them
+      - linters:
+          - dupword
+          - lll
+        path: repohelpers\.go
+      # the usage synopsis lines are long by nature
+      - linters:
+          - lll
+        source: '^\s*feedbuilder \['
+      - linters:
+          - lll
+        path: config.go
+      - linters:
+          - lll
+        source: '^//go:generate '
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      module-path: openwrt-feed-builder # dotless module name: not a std import
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(openwrt-feed-builder)
+      custom-order: false
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
