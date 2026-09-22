@@ -41,7 +41,7 @@ func newBuildCmd(state *app) *cobra.Command {
 		"not just the touched ones (use after an index-format change)")
 	flags.StringVar(&opts.IndexScript, "index-script", "", "generate indexes with the official "+
 		"ipkg-make-index.sh at PATH instead of the native indexer "+
-		"(debugging/comparison; e.g. tools/ipkg-make-index.sh)")
+		"(debugging/comparison; e.g. scripts/ipkg-make-index.sh)")
 
 	return cmd
 }
@@ -72,7 +72,7 @@ func newIndexDiffCmd(state *app) *cobra.Command {
 			return feedbuilder.IndexDiff(cmd.Context(), state.cfg, script)
 		},
 	}
-	cmd.Flags().StringVar(&script, "script", "tools/ipkg-make-index.sh", "path to the official ipkg-make-index.sh")
+	cmd.Flags().StringVar(&script, "script", "scripts/ipkg-make-index.sh", "path to the official ipkg-make-index.sh")
 
 	return cmd
 }

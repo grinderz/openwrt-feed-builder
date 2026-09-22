@@ -29,7 +29,11 @@ built release too (for tools that must ship in lockstep with their kmod).
 
 ```sh
 make build     # go build -> ./openwrt-feed-builder
-make test
+make test              # gotestsum, -race (ARGS=... for go test flags)
+make test.repeat       # every test twice in one process, shuffled order
+make test.coverage     # + artifacts/coverage.{out,html}, GO_TEST_COVERAGE_THRESHOLD
+make test.docker       # the same in a golang image (test.docker.coverage, ...)
+make test.docker.alpine  # musl image with apk-tools + shellcheck: nothing skipped
 make lint      # golangci-lint + shellcheck + pre-commit hooks (incl. gitleaks)
 make lint.fix  # golangci-lint --fix
 make go.format # golines + gofumpt + goimports + gci
@@ -52,7 +56,7 @@ build host (see below).
 
 ```sh
 ./openwrt-feed-builder -c config.yaml build [--refresh] [--full] [--sign] [--reindex] [--index-script PATH] [--only TYPE_OR_NAME[,...]]
-./openwrt-feed-builder -c config.yaml indexdiff [--script tools/ipkg-make-index.sh]
+./openwrt-feed-builder -c config.yaml indexdiff [--script scripts/ipkg-make-index.sh]
 ./openwrt-feed-builder -c config.yaml sign     # (re)sign an existing tree in place
 ./openwrt-feed-builder -c config.yaml verify   # validate every signature + repo.pub
 ./openwrt-feed-builder -c config.yaml howto    # print how to add the feed on a router
@@ -93,9 +97,9 @@ ones — use after an index-format change.
 
 The `Packages` indexes are normally generated natively. For debugging there
 are two escape hatches built on the official OpenWrt generator (vendored
-verbatim from the `openwrt-24.10` branch as `tools/ipkg-make-index.sh`; the
+verbatim from the `openwrt-24.10` branch as `scripts/ipkg-make-index.sh`; the
 builder shims its `mkhash` / GNU `stat` host-tool dependencies, so it runs on
-macOS too): `build --index-script tools/ipkg-make-index.sh` builds the tree
+macOS too): `build --index-script scripts/ipkg-make-index.sh` builds the tree
 with the official script instead, and `indexdiff` regenerates every index
 both ways in memory and prints a unified diff per feed dir (disk untouched).
 Expected deviations of the script: control fields pass through unstripped
