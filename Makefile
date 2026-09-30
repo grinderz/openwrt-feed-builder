@@ -153,7 +153,7 @@ GOLANGCI_LINT_TIMEOUT ?= 10m
 PRE_COMMIT_VERSION ?= 4.6
 PRE_COMMIT ?= uvx pre-commit@$(PRE_COMMIT_VERSION)
 # scripts/ipkg-make-index.sh is vendored verbatim from OpenWrt: not ours to lint
-SHELLCHECK_EXCLUDE := -path ./.git -o -path ./scripts/ipkg-make-index.sh -o -path ./.cache -o -path ./releases
+SHELLCHECK_EXCLUDE := -path ./.git -o -path ./scripts/ipkg-make-index.sh -o -path ./.cache -o -path ./output -o -path ./releases
 
 .PHONY: lint
 lint: lint.golangci lint.shellcheck lint.pre-commit ## Run all linters
@@ -241,8 +241,10 @@ DEPLOY_EXCLUDES := .git .claude .idea .DS_Store /openwrt-feed-builder /feedbuild
 # host-only state that must survive even an exclude-list mistake: rsync 'P'
 # filters forbid deletion regardless of --delete and exclude typos.
 # local.mk and config.yaml are deliberately NOT here: the laptop copies are
-# the source of truth and overwrite the host ones on deploy
-DEPLOY_PROTECT := .cache releases keys
+# the source of truth and overwrite the host ones on deploy.
+# releases is the feed tree of the layout before output/releases: it stays
+# here so a host that has not moved it yet loses nothing
+DEPLOY_PROTECT := .cache output releases keys
 
 DEPLOY_RSYNC = rsync -av --delete \
 	$(foreach e,$(DEPLOY_EXCLUDES),--exclude=$(e)) \
@@ -269,8 +271,11 @@ deploy: ## Deploy repo to DEPLOY_DEST (host-only paths protected from --delete)
 # the source dir lands inside it), set in local.mk. Not to be confused with
 # DEPLOY_DEST above, which syncs this repo to a build host.
 PUBLISH_DEST ?=
-# the feed tree produced by `openwrt-feed-builder build` (output_dir)
-PUBLISH_SRC ?= releases
+# the feed tree produced by `openwrt-feed-builder build` (output_dir). Its
+# last path component is the name it gets under PUBLISH_DEST. The parent,
+# output/, may be a symlink (a disk or subvolume outside the checkout); the
+# tree itself must not be one: rsync would send the link, not the tree
+PUBLISH_SRC ?= output/releases
 
 PUBLISH_RSYNC = rsync -aP --delete "$(PUBLISH_SRC)" "$(PUBLISH_DEST)"
 
@@ -303,6 +308,6 @@ fetch.diff: ## Preview feed fetch from the DEPLOY_DEST build host (rsync dry-run
 	$(FETCH_RSYNC) --dry-run
 
 .PHONY: fetch
-fetch: ## Fetch the generated feed (releases/) from the DEPLOY_DEST build host
+fetch: ## Fetch the generated feed (output/releases/) from the DEPLOY_DEST build host
 	$(call Deploy/Check)
 	$(FETCH_RSYNC)

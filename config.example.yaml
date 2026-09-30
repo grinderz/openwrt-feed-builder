@@ -6,9 +6,19 @@
 # side. The output tree mirrors downloads.openwrt.org/releases/ (see the
 # layout section below).
 
-output_dir: ./releases        # generated feed goes here (the default); builds merge
-                              # into it incrementally, --full recreates it
-cache_dir: ./.cache         # raw downloads are cached here between runs
+output_dir: ./output/releases  # generated feed goes here (the default); builds
+                               # merge into it incrementally, --full recreates it
+# To keep the tree somewhere else (another disk, a subvolume left out of
+# snapshots), make output/ a symlink: it is in .gitignore and in the deploy
+# excludes. Do not symlink releases itself: --full swaps the tree by renaming
+# next to it, which leaves a real directory where the link was, the commands
+# that walk the tree do not descend into a symlinked root, and `make publish`
+# would send the link instead of the tree. A different path here needs the
+# same one as PUBLISH_SRC in local.mk; keep its last component `releases`,
+# the name the feed gets under PUBLISH_DEST.
+cache_dir: ./.cache         # raw downloads are cached here between runs; may
+                            # be a symlink, its temporary files sit next to
+                            # their targets
 
 # Public URL where the feed will be served. Embedded into the generated
 # per-release add.sh so the one-line router installer points at the right host.

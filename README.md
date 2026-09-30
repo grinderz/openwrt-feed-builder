@@ -153,8 +153,8 @@ make serve          # serve the feed over HTTP
 make genkey         # generate the usign keypair
 make genkey.apk     # generate the apk (25.12+) EC keypair
 make deploy         # sync this repo -> DEPLOY_DEST (build host); deploy.diff = dry run
-make fetch          # pull the generated releases/ <- DEPLOY_DEST; fetch.diff = dry run
-make publish        # push releases/ -> PUBLISH_DEST (web server); publish.diff = dry run
+make fetch          # pull the generated output/releases/ <- DEPLOY_DEST; fetch.diff = dry run
+make publish        # push output/releases/ -> PUBLISH_DEST (web server); publish.diff = dry run
 ```
 
 Building on this machine (the keys are here, so the build can sign right away):
@@ -163,7 +163,7 @@ Building on this machine (the keys are here, so the build can sign right away):
 make feed FEED_ARGS="--sign"   # build + sign (or: make feed && make sign)
 make verify                    # every index / key / add.sh ok
 make publish.diff              # what would change on the web server
-make publish                   # runs verify again, then pushes releases/
+make publish                   # runs verify again, then pushes output/releases/
 make howto                     # the commands / feed lines for the routers
 ```
 
@@ -176,7 +176,7 @@ When sdk sources compile on a separate build host:
 ```sh
 make deploy                                  # code + config to the build host
 ssh <host> 'cd .../openwrt-feed-builder && go run ./cmd/openwrt-feed-builder build'
-make fetch                                   # unsigned feed (releases/ only) back here
+make fetch                                   # unsigned feed (output/releases/ only) back here
 make sign                                    # sign it with the local keys
 make verify
 make publish                                 # feed to the web server
@@ -185,8 +185,20 @@ make publish                                 # feed to the web server
 `make deploy` never sends `keys/` — the usign and apk secrets stay on this
 machine; the build host produces an unsigned tree and `sign` runs here after
 `fetch`.
-The host's `.cache/`, `releases/` and `keys/` are protected from `--delete`;
+The host's `.cache/`, `output/` and `keys/` are protected from `--delete`;
 `local.mk` and `config.yaml` sync with the laptop copies winning.
+
+The feed tree is `output/releases/` (`output_dir`; `PUBLISH_SRC` in the
+Makefile names the same path). `output/` and `.cache/` may be symlinks to a
+disk or a subvolume outside the checkout; `releases` itself must stay a real
+directory — `build --full` swaps it by renaming next to it, and `publish`
+would send a link instead of the tree. Its name is the one the feed gets
+under `PUBLISH_DEST`.
+
+A checkout from before this layout kept the tree in `./releases`. Move it
+once, here and on the build host: `mkdir output && mv releases output/`. To
+stay on the old layout instead, set `output_dir: ./releases` in `config.yaml`
+and `PUBLISH_SRC := releases` in `local.mk`.
 
 ## Signing (usign)
 

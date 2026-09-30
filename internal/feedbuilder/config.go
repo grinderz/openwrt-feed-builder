@@ -264,7 +264,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	return &Config{
 		BaseDir:       base,
-		OutputDir:     resolve(asString(data["output_dir"], "./releases")),
+		OutputDir:     resolve(asString(data["output_dir"], "./output/releases")),
 		CacheDir:      resolve(asString(data["cache_dir"], "./.cache")),
 		Sources:       sources,
 		Architectures: parseArchitectures(data["architectures"]),

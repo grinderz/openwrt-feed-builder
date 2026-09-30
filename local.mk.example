@@ -5,6 +5,13 @@
 # (user@host:/path, no trailing slash)
 DEPLOY_DEST := user@buildhost:/home/user/src/openwrt-feed-builder
 
-# rsync destination for `make publish` — the generated feed (releases/) to the
-# web server (host:/path/, trailing slash: the releases dir lands inside it)
+# rsync destination for `make publish` — the generated feed (output/releases/)
+# to the web server (host:/path/, trailing slash: the releases dir lands
+# inside it)
 PUBLISH_DEST := webserver:/var/www/openwrt/
+
+# the feed tree, only when output_dir in config.yaml is not the default
+# ./output/releases (see the note there). Its last path component is the name
+# the tree gets under PUBLISH_DEST, and `make fetch` reads the same relative
+# path on the build host.
+# PUBLISH_SRC := releases
