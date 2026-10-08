@@ -141,8 +141,14 @@ See `config.example.yaml` for the config format.
 
 ## Build cycle (Makefile)
 
-Deploy/publish plumbing lives in the `Makefile`; destinations go into
-`local.mk` (gitignored, see `local.mk.example`):
+Deploy/publish plumbing lives in the `Makefile`; destinations come from
+`~/.config/openwrt-feed-builder/config.mk` (the dotfiles repo renders it) or a
+repo-local `local.mk` (gitignored, see `local.mk.example`). `config.yaml` in
+the checkout is a copy of `~/.config/openwrt-feed-builder/config.yaml`,
+refreshed by make whenever that one is newer — the tool resolves its `./`
+paths from the config's directory and `make deploy` ships the copy to the
+build host; edit the dotfiles template, not the copy. Without the XDG file a
+hand-kept `config.yaml` works as before.
 
 ```sh
 make feed           # build the feed (FEED_ARGS="--full --sign --only sdk" for flags)

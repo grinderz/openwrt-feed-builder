@@ -7,7 +7,8 @@
 /releases
 /releases.building
 /releases.old
-/keys
+/keys/secret.key
+/keys/apk-private.pem
 config.yaml
 local.mk
 .idea/

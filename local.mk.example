@@ -1,5 +1,7 @@
-# Local user config: cp local.mk.example local.mk (gitignored; note deploy
-# DOES sync local.mk itself, the laptop copy wins on the host).
+# Repo-local override of ~/.config/openwrt-feed-builder/config.mk (which
+# dotfiles renders from [data.openwrt] in the private toml): cp
+# local.mk.example local.mk (gitignored; note deploy DOES sync local.mk
+# itself, the laptop copy wins on the host).
 
 # rsync destination for `make deploy` — this repo to a build host
 # (user@host:/path, no trailing slash)

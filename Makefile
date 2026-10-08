@@ -4,8 +4,12 @@ MAKEFLAGS += --warn-undefined-variables
 .SHELLFLAGS := -o errtrace -o pipefail -o noclobber -o errexit -o nounset -c
 SHELL := bash
 
-# local user config (gitignored, see local.mk.example): set DEPLOY_DEST there
-# instead of editing this Makefile; CLI variables still win over it
+# host config: ~/.config/openwrt-feed-builder/config.mk (dotfiles renders
+# DEPLOY_DEST / PUBLISH_DEST from [data.openwrt] in its private toml),
+# overridden by a repo-local local.mk (gitignored, see local.mk.example).
+# CLI variables still win over both
+XDG_CONFIG_HOME ?= $(HOME)/.config
+-include $(XDG_CONFIG_HOME)/openwrt-feed-builder/config.mk
 -include local.mk
 
 FEEDBUILDER := go run ./cmd/openwrt-feed-builder
@@ -14,7 +18,7 @@ FEEDBUILDER := go run ./cmd/openwrt-feed-builder
 # $(1): variable name, $(2): example value
 define Check/Dest
 	@if [ -z "$($(1))" ]; then
-		echo " - $(1) not set, add to local.mk:"
+		echo " - $(1) not set, add to ~/.config/openwrt-feed-builder/config.mk or local.mk:"
 		echo "   $(1) := $(2)"
 		exit 1
 	fi
@@ -189,31 +193,42 @@ go.format: ## Format the source code (golines, gofumpt, goimports, gci)
 ##@ Feed Targets
 
 
-# config the feed commands run with (override per invocation or in local.mk)
+# config the feed commands run with (override per invocation or in local.mk).
+# The repo-local config.yaml is a copy of ~/.config/openwrt-feed-builder/config.yaml
+# (dotfiles renders it from its private toml), refreshed whenever that one is
+# newer: the tool resolves ./paths from the config's directory and `make
+# deploy` ships the copy to the build host, so it has to sit here. Edit the
+# dotfiles template, not the copy. Without the XDG file a hand-kept
+# config.yaml works as before
 FEED_CONFIG ?= config.yaml
+FEED_CONFIG_SRC ?= $(XDG_CONFIG_HOME)/openwrt-feed-builder/config.yaml
+FEED_CONFIG_DEP := $(if $(wildcard $(FEED_CONFIG_SRC)),config.yaml)
+
+config.yaml: $(FEED_CONFIG_SRC)
+	cp "$<" "$@"
 # extra `build` flags: make feed FEED_ARGS="--full --sign --only sdk"
 FEED_ARGS ?=
 
 .PHONY: feed
-feed: ## Build the feed (incremental, unsigned; flags via FEED_ARGS)
+feed: $(FEED_CONFIG_DEP) ## Build the feed (incremental, unsigned; flags via FEED_ARGS)
 	$(FEEDBUILDER) -c $(FEED_CONFIG) build $(FEED_ARGS)
 
 .PHONY: sign
-sign: ## Sign the feed tree in place (Packages.sig / packages.adb + repo keys + add.sh)
+sign: $(FEED_CONFIG_DEP) ## Sign the feed tree in place (Packages.sig / packages.adb + repo keys + add.sh)
 	$(FEEDBUILDER) -c $(FEED_CONFIG) sign
 
 # verifies exactly the tree publish ships ($(PUBLISH_SRC)), not the config's
 # output_dir — the two may diverge
 .PHONY: verify
-verify: ## Validate every feed signature + repo.pub + add.sh key step
+verify: $(FEED_CONFIG_DEP) ## Validate every feed signature + repo.pub + add.sh key step
 	$(FEEDBUILDER) -c $(FEED_CONFIG) verify "$(PUBLISH_SRC)"
 
 .PHONY: howto
-howto: ## Print how to add the feed on a router (no build)
+howto: $(FEED_CONFIG_DEP) ## Print how to add the feed on a router (no build)
 	$(FEEDBUILDER) -c $(FEED_CONFIG) howto
 
 .PHONY: serve
-serve: ## Serve the feed over HTTP (config `serve` section)
+serve: $(FEED_CONFIG_DEP) ## Serve the feed over HTTP (config `serve` section)
 	$(FEEDBUILDER) -c $(FEED_CONFIG) serve
 
 .PHONY: genkey
@@ -254,12 +269,12 @@ DEPLOY_RSYNC = rsync -av --delete \
 Deploy/Check = $(call Check/Dest,DEPLOY_DEST,user@buildhost:/home/user/src/openwrt-feed-builder)
 
 .PHONY: deploy.diff
-deploy.diff: ## Preview deploy (rsync dry-run: what gets sent/deleted)
+deploy.diff: $(FEED_CONFIG_DEP) ## Preview deploy (rsync dry-run: what gets sent/deleted)
 	$(call Deploy/Check)
 	$(DEPLOY_RSYNC) --dry-run
 
 .PHONY: deploy
-deploy: ## Deploy repo to DEPLOY_DEST (host-only paths protected from --delete)
+deploy: $(FEED_CONFIG_DEP) ## Deploy repo to DEPLOY_DEST (host-only paths protected from --delete)
 	$(call Deploy/Check)
 	$(DEPLOY_RSYNC)
 
