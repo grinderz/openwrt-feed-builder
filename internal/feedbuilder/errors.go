@@ -19,6 +19,7 @@ var (
 	errSDKSource       = errors.New("sdk source")
 	errHTTPStatus      = errors.New("unexpected HTTP status")
 	errGitHub          = errors.New("GitHub API")
+	errToken           = errors.New("github token")
 	errDownload        = errors.New("download")
 	errOutputDir       = errors.New("output directory")
 	errSignUnavailable = errors.New("signing unavailable")

@@ -35,6 +35,13 @@ feed_prefix: custom
 # OpenWrt 25.12 SDK's staging_dir/host/bin/apk.
 # apk_tool: apk
 
+# GitHub API token for the github / github_dir / binary sources (the
+# unauthenticated limit is 60 requests an hour per IP). Resolved in this order:
+# GITHUB_TOKEN in the environment; this command's output; `gh auth token` when
+# gh is installed and logged in (gh auth login); else unauthenticated.
+# github_token_cmd: "pass show github/token"
+# github_token_cmd: "gh auth token --hostname github.com"
+
 # Optional: only keep packages for these architectures (plus 'all').
 # Leave empty to keep every architecture encountered.
 architectures: ["aarch64_cortex-a53","mipsel_24kc"]
@@ -146,7 +153,8 @@ sources:
     include: ["luci-app-*"]   # glob match on the Package name
     exclude: ["luci-app-*-i18n-*"]
 
-  # 3) .ipk assets attached to a GitHub release (set GITHUB_TOKEN to avoid rate limits).
+  # 3) .ipk assets attached to a GitHub release (see github_token_cmd above
+  #    for the API rate limit).
   - type: github
     name: someproject
     enabled: false
@@ -203,7 +211,8 @@ sources:
   #   ref: master
   #   pattern: "*.ipk"
   #   recursive: false
-  #   # tip: set GITHUB_TOKEN in the environment to avoid the 60 req/h limit
+  #   # tip: a GitHub token (GITHUB_TOKEN, github_token_cmd or gh's login)
+  #   # lifts the 60 req/h limit
 
   # 7) Raw binary / archive repacked into a locally built package — for
   #    upstreams that ship plain binaries instead of packages. One package is

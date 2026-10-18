@@ -35,8 +35,20 @@ const (
 
 // Client is a retrying HTTP client with a fixed User-Agent.
 type Client struct {
-	hc        *http.Client
-	userAgent string
+	hc          *http.Client
+	userAgent   string
+	githubToken string // sent with the GitHub API calls, "" runs unauthenticated
+}
+
+// githubHeaders are the headers of a GitHub API call: the JSON media type
+// and, with a token, the bearer authorization.
+func (c *Client) githubHeaders() map[string]string {
+	h := map[string]string{"Accept": "application/vnd.github+json"}
+	if c.githubToken != "" {
+		h["Authorization"] = "Bearer " + c.githubToken
+	}
+
+	return h
 }
 
 func newClient() *Client {
