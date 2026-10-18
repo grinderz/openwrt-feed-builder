@@ -489,13 +489,13 @@ func (b *buildRun) prune() {
 	keepByDir := map[string]map[string]string{} // dir -> pkg -> version kept
 
 	for key, ver := range b.newVersions {
-		if sep := strings.LastIndex(key, "|"); sep >= 0 {
-			dir := filepath.Join(b.buildDir, filepath.FromSlash(key[:sep]))
+		if rel, pkg, ok := strings.CutLast(key, "|"); ok {
+			dir := filepath.Join(b.buildDir, filepath.FromSlash(rel))
 			if keepByDir[dir] == nil {
 				keepByDir[dir] = map[string]string{}
 			}
 
-			keepByDir[dir][key[sep+1:]] = ver
+			keepByDir[dir][pkg] = ver
 		}
 	}
 
@@ -707,11 +707,9 @@ func withSnapshotDirs(relPaths []string, oldVersions map[string]string) []string
 	relSet := toSet(relPaths)
 
 	for key := range oldVersions {
-		if sep := strings.LastIndex(key, "|"); sep >= 0 {
-			if rel := key[:sep]; !relSet[rel] {
-				relSet[rel] = true
-				relPaths = append(relPaths, rel)
-			}
+		if rel, _, ok := strings.CutLast(key, "|"); ok && !relSet[rel] {
+			relSet[rel] = true
+			relPaths = append(relPaths, rel)
 		}
 	}
 

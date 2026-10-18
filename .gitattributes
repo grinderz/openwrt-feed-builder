@@ -23,6 +23,10 @@
 *.gz       binary
 *.tar      binary
 
+# Public keys (usign, apk): the secret ones never reach git
+*.pem      text eol=lf
+*.key      text eol=lf
+
 # Go files: no line-ending magic
 *.go       -text diff=golang
 go.mod     text eol=lf

@@ -1,0 +1,94 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Renovate on GitHub keeps every version here: the go.mod requires, the actions of the workflow, the pre-commit hook revs and the tool versions of the Makefile.",
+    "The go directive moves by hand; test.docker takes its golang image tag from it."
+  ],
+  "extends": [
+    "config:recommended"
+  ],
+  "semanticCommitType": "chore",
+  "baseBranchPatterns": [
+    "main"
+  ],
+  "enabledManagers": [
+    "gomod",
+    "github-actions",
+    "pre-commit",
+    "custom.regex"
+  ],
+  "pre-commit": {
+    "enabled": true
+  },
+  "branchPrefix": "renovate/",
+  "labels": [
+    "dependencies"
+  ],
+  "postUpdateOptions": [
+    "gomodTidy",
+    "gomodUpdateImportPaths"
+  ],
+  "packageRules": [
+    {
+      "description": "the go and toolchain directives are bumped by hand",
+      "matchDepTypes": [
+        "golang",
+        "toolchain"
+      ],
+      "enabled": false
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "golangci-lint, run through go run at the version of the Makefile",
+      "managerFilePatterns": [
+        "/^Makefile$/"
+      ],
+      "matchStrings": [
+        "GO_GOLANGCI_LINT_VERSION \\?= (?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "golangci/golangci-lint",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "gotestsum, the same way",
+      "managerFilePatterns": [
+        "/^Makefile$/"
+      ],
+      "matchStrings": [
+        "GO_GOTESTSUM_VERSION \\?= (?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "gotestyourself/gotestsum",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "pre-commit, run through uvx at the version of the Makefile",
+      "managerFilePatterns": [
+        "/^Makefile$/"
+      ],
+      "matchStrings": [
+        "PRE_COMMIT_VERSION \\?= (?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "pre-commit",
+      "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "description": "the alpine of the musl test image, a golang:<go>-alpine<version> tag",
+      "managerFilePatterns": [
+        "/^Makefile$/"
+      ],
+      "matchStrings": [
+        "GO_DOCKER_ALPINE_VERSION \\?= (?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "alpine",
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)$"
+    }
+  ]
+}

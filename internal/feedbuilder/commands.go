@@ -450,8 +450,8 @@ func reportChanges(prev, cur map[string]string, prunedFiles []string, full bool)
 	var added, removed, upgraded, downgraded []change
 
 	split := func(k string) (string, string) {
-		if i := strings.LastIndex(k, "|"); i >= 0 {
-			return k[:i], k[i+1:]
+		if loc, pkg, ok := strings.CutLast(k, "|"); ok {
+			return loc, pkg
 		}
 
 		return "", k

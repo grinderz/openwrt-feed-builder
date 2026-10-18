@@ -174,8 +174,8 @@ func stripQuery(s string) string {
 }
 
 func lastPathPart(s string) string {
-	if i := strings.LastIndexByte(s, '/'); i >= 0 {
-		return s[i+1:]
+	if _, last, ok := strings.CutLast(s, "/"); ok {
+		return last
 	}
 
 	return s

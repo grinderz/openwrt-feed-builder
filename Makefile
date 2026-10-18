@@ -151,24 +151,24 @@ test.docker.alpine.%: ## Run make test.$* in the alpine (musl) golang image, e.g
 
 
 # pinned; `go run` fetches the exact version on demand
-GOLANGCI_LINT_VERSION ?= 2.13.2
-GOLANGCI_LINT ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(GOLANGCI_LINT_VERSION)
-GOLANGCI_LINT_TIMEOUT ?= 10m
-PRE_COMMIT_VERSION ?= 4.6
+GO_GOLANGCI_LINT_VERSION ?= 2.15.0
+GO_GOLANGCI_LINT_CMD ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(GO_GOLANGCI_LINT_VERSION)
+GO_GOLANGCI_LINT_TIMEOUT ?= 10m
+PRE_COMMIT_VERSION ?= 4.7.0
 PRE_COMMIT ?= uvx pre-commit@$(PRE_COMMIT_VERSION)
 # scripts/ipkg-make-index.sh is vendored verbatim from OpenWrt: not ours to lint
 SHELLCHECK_EXCLUDE := -path ./.git -o -path ./scripts/ipkg-make-index.sh -o -path ./.cache -o -path ./output -o -path ./releases
 
 .PHONY: lint
-lint: lint.golangci lint.shellcheck lint.pre-commit ## Run all linters
+lint: lint.golangci lint.shellcheck lint.gitattributes lint.pre-commit ## Run all linters
 
 .PHONY: lint.golangci
 lint.golangci: ## Run golangci-lint (ARGS=... for extra flags)
-	$(GOLANGCI_LINT) run --timeout=$(GOLANGCI_LINT_TIMEOUT) --show-stats $(ARGS)
+	$(GO_GOLANGCI_LINT_CMD) run --timeout=$(GO_GOLANGCI_LINT_TIMEOUT) --show-stats $(ARGS)
 
 .PHONY: lint.fix
 lint.fix: ## Run golangci-lint with --fix
-	$(GOLANGCI_LINT) run --timeout=$(GOLANGCI_LINT_TIMEOUT) --fix --show-stats $(ARGS)
+	$(GO_GOLANGCI_LINT_CMD) run --timeout=$(GO_GOLANGCI_LINT_TIMEOUT) --fix --show-stats $(ARGS)
 
 .PHONY: lint.shellcheck
 lint.shellcheck: ## Run shellcheck on the repo's shell scripts
@@ -178,6 +178,10 @@ lint.shellcheck: ## Run shellcheck on the repo's shell scripts
 .PHONY: lint.pre-commit
 lint.pre-commit: ## Run the pre-commit hooks on every file
 	$(PRE_COMMIT) run --all-files
+
+.PHONY: lint.gitattributes
+lint.gitattributes: ## Check every tracked file has a .gitattributes rule
+	scripts/gitattributes-check.sh
 
 # formatter chain; the module prefix is spelled out for gci and gofumpt (a
 # dotless module name would otherwise pass for a std import)

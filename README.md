@@ -34,7 +34,7 @@ make test.repeat       # every test twice in one process, shuffled order
 make test.coverage     # + artifacts/coverage.{out,html}, GO_TEST_COVERAGE_THRESHOLD
 make test.docker       # the same in a golang image (test.docker.coverage, ...)
 make test.docker.alpine  # musl image with apk-tools + shellcheck: nothing skipped
-make lint      # golangci-lint + shellcheck + pre-commit hooks (incl. gitleaks)
+make lint      # golangci-lint + shellcheck + .gitattributes check + pre-commit hooks (incl. gitleaks)
 make lint.fix  # golangci-lint --fix
 make go.format # golines + gofumpt + goimports + gci
 ```
@@ -43,9 +43,16 @@ Lint setup: `.golangci.yml` enables all linters (`default: all`) except a few
 opinionated ones and `forbidigo` (a CLI prints with `fmt.Print*`); the
 complexity limits are raised (cyclop 30, gocognit 50, funlen 150 lines / 60
 statements, nestif 8) and the add.sh templates are exempt from dupword/lll. golangci-lint is pinned via `go run`
-(`GOLANGCI_LINT=golangci-lint` to use a local binary), pre-commit runs through
-`uvx`. The generated `add.sh` scripts are shellchecked by the test suite when
-shellcheck is installed.
+(`GO_GOLANGCI_LINT_CMD=golangci-lint` to use a local binary), pre-commit runs
+through `uvx`. The generated `add.sh` scripts are shellchecked by the test suite
+when shellcheck is installed.
+
+CI (`.github/workflows/ci.yml`) runs the linters, `make test.coverage` on the
+runner and `make test.docker.alpine`, where the apk-tools and shellcheck tests
+run too. Renovate (`renovate.json`) bumps the go.mod requires, the actions, the
+pre-commit hook revs and the tool pins of the Makefile (golangci-lint,
+gotestsum, pre-commit, the alpine of the musl test image); the `go` directive
+is bumped by hand, `test.docker` takes its golang image tag from it.
 
 Single static binary. Dependencies: `github.com/spf13/cobra`, `gopkg.in/yaml.v3`,
 `github.com/ulikunitz/xz`.
