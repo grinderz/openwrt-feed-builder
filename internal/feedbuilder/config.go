@@ -131,6 +131,10 @@ type Config struct {
 	BaseURL       string
 	FeedPrefix    string  // opkg feed-name prefix, e.g. "custom" -> custom_<arch>
 	APKTool       apkTool // apk-tools v3 binary for 25.12+ branches
+	// GitHubTokenCmd is a shell command that prints the GitHub API token, or
+	// "": GITHUB_TOKEN in the environment wins over it, gh's login is the
+	// fallback (see githubToken).
+	GitHubTokenCmd string
 }
 
 func asString(val any, def string) string {
@@ -263,18 +267,19 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	return &Config{
-		BaseDir:       base,
-		OutputDir:     resolve(asString(data["output_dir"], "./output/releases")),
-		CacheDir:      resolve(asString(data["cache_dir"], "./.cache")),
-		Sources:       sources,
-		Architectures: parseArchitectures(data["architectures"]),
-		Targets:       parseTargets(data["targets"]),
-		Layout:        layout,
-		Sign:          sign,
-		Serve:         serve,
-		BaseURL:       strings.TrimRight(asString(data["base_url"], ""), "/"),
-		FeedPrefix:    feedPrefixRE.ReplaceAllString(asString(data["feed_prefix"], "custom"), "_"),
-		APKTool:       apkTool(asString(data["apk_tool"], "apk")),
+		BaseDir:        base,
+		OutputDir:      resolve(asString(data["output_dir"], "./output/releases")),
+		CacheDir:       resolve(asString(data["cache_dir"], "./.cache")),
+		Sources:        sources,
+		Architectures:  parseArchitectures(data["architectures"]),
+		Targets:        parseTargets(data["targets"]),
+		Layout:         layout,
+		Sign:           sign,
+		Serve:          serve,
+		BaseURL:        strings.TrimRight(asString(data["base_url"], ""), "/"),
+		FeedPrefix:     feedPrefixRE.ReplaceAllString(asString(data["feed_prefix"], "custom"), "_"),
+		APKTool:        apkTool(asString(data["apk_tool"], "apk")),
+		GitHubTokenCmd: asString(data["github_token_cmd"], ""),
 	}, nil
 }
 

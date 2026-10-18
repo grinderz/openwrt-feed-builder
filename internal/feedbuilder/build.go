@@ -52,10 +52,31 @@ type buildRun struct {
 	skipped, routed, unchanged, superseded, pruned int
 }
 
+// newBuildClient is the HTTP client of a build, carrying the GitHub API token
+// when one is found (and saying where).
+func newBuildClient(ctx context.Context, cfg *Config) (*Client, error) {
+	token, from, err := githubToken(ctx, cfg.GitHubTokenCmd)
+	if err != nil {
+		return nil, err
+	}
+
+	if from != "" {
+		fmt.Println(Dim("GitHub API token: " + from))
+	}
+
+	client := newClient()
+	client.githubToken = token
+
+	return client, nil
+}
+
 // Build runs the `build` command: collect every source, route the packages
 // into the feed tree, index (and optionally sign) it, write the helpers.
 func Build(ctx context.Context, cfg *Config, opts BuildOptions) error {
-	client := newClient()
+	client, err := newBuildClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
 
 	cache, err := newCache(cfg.CacheDir, client, opts.Refresh)
 	if err != nil {

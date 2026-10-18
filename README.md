@@ -360,6 +360,13 @@ internal/feedbuilder/              # all logic (package feedbuilder)
 
 - `usign` (signing / `genkey`) and apk-tools v3 (apk index, signing, verify,
   `binary` .apk packaging) are shelled out; the apk key is generated natively.
+- The GitHub API calls of the `github` / `github_dir` / `binary` sources are
+  rate-limited to 60/hour per IP without a token. `build` looks for one in
+  this order and prints where it came from: `GITHUB_TOKEN` in the
+  environment, the output of `github_token_cmd:` in the config (any command:
+  `pass show github/token`, `gh auth token --hostname github.com`; a failure
+  there stops the build), then `gh auth token` when gh is installed and
+  logged in. Without any the calls run unauthenticated.
 - HTTP downloads use a small retry loop in `download.go` (4 retries, exponential
   backoff, retries 429/500/502/503/504).
 - Sources are kept untyped (`map[string]any`) so each resolver reads only the

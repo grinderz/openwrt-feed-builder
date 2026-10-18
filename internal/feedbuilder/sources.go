@@ -32,7 +32,6 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"regexp"
 	"sort"
@@ -345,18 +344,9 @@ func readAllGzip(gz *gzip.Reader) (string, error) {
 var ghTreeRE = regexp.MustCompile(
 	`^https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/tree/(?P<ref>[^/]+)/(?P<rest>.+)$`)
 
-func githubHeaders() map[string]string {
-	h := map[string]string{"Accept": "application/vnd.github+json"}
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		h["Authorization"] = "Bearer " + token
-	}
-
-	return h
-}
-
 // ghGet GETs a GitHub API URL, turning common failures into helpful messages.
 func ghGet(ctx context.Context, client *Client, apiURL string) ([]byte, error) {
-	resp, err := client.do(ctx, apiURL, githubHeaders())
+	resp, err := client.do(ctx, apiURL, client.githubHeaders())
 	if err != nil {
 		return nil, err
 	}
@@ -368,9 +358,10 @@ func ghGet(ctx context.Context, client *Client, apiURL string) ([]byte, error) {
 	}
 
 	if resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-Ratelimit-Remaining") == "0" {
-		return nil, fmt.Errorf("%w rate limit exceeded. Set GITHUB_TOKEN to raise "+
-			"the limit (export GITHUB_TOKEN=ghp_...). Unauthenticated requests are limited "+
-			"to 60/hour per IP", errGitHub)
+		return nil, fmt.Errorf("%w rate limit exceeded. Authenticate to raise the limit: "+
+			"export GITHUB_TOKEN=ghp_..., set github_token_cmd in the config, or log in "+
+			"with gh (gh auth login). Unauthenticated requests are limited to 60/hour per IP",
+			errGitHub)
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
