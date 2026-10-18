@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: astral-sh/setup-uv@v10.3.0
+
+      - name: golangci-lint
+        run: make lint.golangci
+
+      - name: shellcheck
+        run: make lint.shellcheck
+
+      - name: gitattributes
+        run: make lint.gitattributes
+
+      - name: pre-commit
+        run: make lint.pre-commit
+
+  # the runner has no usign / apk-tools v3: those tests skip themselves,
+  # test-alpine runs them
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: test with coverage
+        run: make test.coverage
+
+      - name: upload coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: artifacts/
+          if-no-files-found: ignore
+
+  # musl image with apk-tools v3 and shellcheck: the apk index / signing and
+  # the add.sh tests run here
+  test-alpine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: test in the alpine golang image
+        run: make test.docker.alpine
