@@ -214,7 +214,7 @@ func writeRepoHelpers(outputDir string, cfg *Config, feeds map[string][]string,
 			return nil, fmt.Errorf("cannot read %s: %w", pub.what, err)
 		}
 
-		if err := writeFile(filepath.Join(outputDir, pub.dst), data, filePerm); err != nil {
+		if err := writeFileIfChanged(filepath.Join(outputDir, pub.dst), data, filePerm); err != nil {
 			return nil, err
 		}
 	}
@@ -251,7 +251,7 @@ func writeRepoHelpers(outputDir string, cfg *Config, feeds map[string][]string,
 		}
 
 		addSH := filepath.Join(dir, "add.sh")
-		if err := writeFile(addSH, []byte(repl.Replace(tmpl)), execPerm); err != nil {
+		if err := writeFileIfChanged(addSH, []byte(repl.Replace(tmpl)), execPerm); err != nil {
 			return nil, err
 		}
 

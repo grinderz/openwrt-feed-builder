@@ -296,7 +296,11 @@ PUBLISH_DEST ?=
 # tree itself must not be one: rsync would send the link, not the tree
 PUBLISH_SRC ?= output/releases
 
-PUBLISH_RSYNC = rsync -aP --delete "$(PUBLISH_SRC)" "$(PUBLISH_DEST)"
+# -v lists the files sent and deleted
+PUBLISH_RSYNC = rsync -av --partial --delete "$(PUBLISH_SRC)" "$(PUBLISH_DEST)"
+# one progress line for the whole transfer instead of one per file; only on
+# the real run, a dry run has nothing to show
+PUBLISH_PROGRESS ?= --info=progress2
 
 define Publish/Check
 	$(call Check/Dest,PUBLISH_DEST,webserver:/var/www/openwrt/)
@@ -314,7 +318,7 @@ publish.diff: ## Preview feed publish (rsync dry-run)
 .PHONY: publish
 publish: verify ## Publish the generated feed to PUBLISH_DEST (web server; refuses unsigned/broken signatures)
 	$(call Publish/Check)
-	$(PUBLISH_RSYNC)
+	$(PUBLISH_RSYNC) $(PUBLISH_PROGRESS)
 
 # pull the feed a remote `build` produced on the DEPLOY_DEST host back here
 # (e.g. sdk sources compile on the build host, publish happens from this

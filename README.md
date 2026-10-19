@@ -129,7 +129,11 @@ How a cached download / build is considered up to date, per source type:
 
 Everything re-fetches/rebuilds with `--refresh`. Placed feed files are compared
 by SHA256 against the routed package, so an unchanged package never touches its
-feed dir.
+feed dir. The helpers a build regenerates every run (`add.sh`, `repo.pub`,
+`repo-apk.pem`) are rewritten only when their content changes, so `publish`
+(rsync by size and mtime) leaves them alone too. A signed `packages.adb` is
+the exception: its ECDSA signature differs on every `sign`, so the apk
+indexes are sent after each signing run; usign signatures are deterministic.
 
 Assets whose file name already rules them out are not downloaded at all: a
 name carrying an architecture outside `architectures:` or a target outside
