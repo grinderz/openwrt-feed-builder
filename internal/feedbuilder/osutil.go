@@ -4,6 +4,7 @@ package feedbuilder
 // files, best-effort cleanup.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -36,6 +37,18 @@ func writeFile(path string, data []byte, perm os.FileMode) error {
 	}
 
 	return nil
+}
+
+// writeFileIfChanged is writeFile that leaves a file holding the same bytes
+// alone. rsync -a ships a file whose mtime moved, so the helpers a build
+// regenerates every run (add.sh, the public keys) are only touched when
+// their content changes.
+func writeFileIfChanged(path string, data []byte, perm os.FileMode) error {
+	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, data) {
+		return nil
+	}
+
+	return writeFile(path, data, perm)
 }
 
 // readAll is io.ReadAll with the error wrapped.
