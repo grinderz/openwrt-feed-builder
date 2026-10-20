@@ -513,6 +513,12 @@ func TestBinaryEndToEndIndex(t *testing.T) {
 	if len(stanzas) != 1 || stanzas[0][tFieldPackage] != tKeyTool || stanzas[0]["SHA256sum"] == "" {
 		t.Errorf("bad index:\n%s", data)
 	}
+
+	index := readJSONIndex(t, feedDir)
+	if index.Version != jsonIndexVersion || index.Architecture != stanzas[0]["Architecture"] ||
+		len(index.Packages) != 1 || index.Packages[tKeyTool] != stanzas[0]["Version"] {
+		t.Errorf("index.json = %+v, want the Packages entry", index)
+	}
 }
 
 func TestInsertIndexFields(t *testing.T) {

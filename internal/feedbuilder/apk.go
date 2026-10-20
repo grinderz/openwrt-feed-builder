@@ -53,6 +53,7 @@ const (
 const (
 	opkgIndexName = "Packages"
 	apkIndexName  = "packages.adb"
+	jsonIndexName = "index.json" // next to either: name -> version, for asu / owut
 	archAll       = "all"
 	archNoarch    = "noarch"
 )
