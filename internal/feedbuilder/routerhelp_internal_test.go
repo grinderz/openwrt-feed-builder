@@ -72,7 +72,7 @@ func TestRelBranch(t *testing.T) {
 	layout := Layout{Versions: []string{tRel24108, tRel25125}}
 
 	cases := map[string]string{
-		"packages-25.12/mipsel_24kc/packages":         tBranch25,
+		tFeedMipsel2512: tBranch25,
 		"25.12.5/targets/mediatek/filogic/packages":   tBranch25,
 		"24.10.8/targets/ramips/mt7621/kmods/6.6.1-1": tBranch24,
 		"packages-23.05/mipsel_24kc/packages":         "",

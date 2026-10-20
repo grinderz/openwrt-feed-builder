@@ -12,6 +12,7 @@ const (
 	tDepLibc          = "libc"
 	tFeedA53          = "packages-24.10/aarch64_cortex-a53/packages"
 	tFeedMipsel       = "packages-24.10/mipsel_24kc/packages"
+	tFeedMipsel2512   = "packages-25.12/mipsel_24kc/packages"
 	tFeedPackages     = "packages"
 	tFeedPrefix       = "myfeed"
 	tFeedX86          = "packages-24.10/x86_64/packages"

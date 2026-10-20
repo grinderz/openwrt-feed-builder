@@ -32,6 +32,7 @@ package feedbuilder
 // which opkg enforces at install time.
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -48,6 +49,38 @@ type Layout struct {
 	Versions    []string // point releases the feed carries, e.g. ["24.10.7", "25.12.5"]
 	DefaultFeed string
 	KmodVersion string // explicit fallback release for kmods of its branch (default: newest)
+}
+
+// releaseDirRE matches the name of a point release dir of the tree
+// ("24.10.8", "25.12.0-rc1"), as opposed to packages-<branch> and the helpers.
+var releaseDirRE = regexp.MustCompile(`^\d+\.\d+\.\d+(-rc\d+)?$`)
+
+// staleTopDirs lists the top-level dirs of root that belong to releases the
+// layout no longer carries: <release>/ dirs outside layout.version and
+// packages-<branch>/ dirs of a branch without any release left. Sorted.
+func (l Layout) staleTopDirs(root string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+
+	var stale []string
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() {
+			continue
+		}
+
+		switch branch, isBranchDir := strings.CutPrefix(name, "packages-"); {
+		case isBranchDir && !l.hasBranch(branch):
+			stale = append(stale, name)
+		case !isBranchDir && releaseDirRE.MatchString(name) && !slices.Contains(l.Versions, name):
+			stale = append(stale, name)
+		}
+	}
+
+	return stale
 }
 
 // releaseBranch returns the branch of a 3-part point release: "24.10.7" -> "24.10".

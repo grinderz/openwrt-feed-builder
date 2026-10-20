@@ -257,6 +257,12 @@ func TestAPKIndexSignVerify(t *testing.T) {
 		t.Error("leafFormat should detect the apk dir")
 	}
 
+	index := readJSONIndex(t, dir)
+	if index.Version != jsonIndexVersion || index.Architecture == archAll ||
+		len(index.Packages) != 2 || index.Packages["kmod-test"] != "6.12.94.1.0-r1" {
+		t.Errorf("index.json = %+v", index)
+	}
+
 	if signed, _ := adbSigned(filepath.Join(dir, "packages.adb")); signed {
 		t.Error("fresh index must be unsigned")
 	}

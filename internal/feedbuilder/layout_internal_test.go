@@ -200,7 +200,7 @@ func TestRelativeDirAPK(t *testing.T) {
 	}
 
 	user := map[string]string{tFieldPackage: "luci-app-x"}
-	if got := relativeDir(user, tArchMipsel, layout, tBranch25, "", "", ""); got != "packages-25.12/mipsel_24kc/packages" {
+	if got := relativeDir(user, tArchMipsel, layout, tBranch25, "", "", ""); got != tFeedMipsel2512 {
 		t.Errorf("apk userspace: got %q", got)
 	}
 	// an unbound kmod lands in the newest release of ITS branch

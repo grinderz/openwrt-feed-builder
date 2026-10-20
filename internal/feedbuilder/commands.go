@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -444,7 +445,17 @@ func snapshotVersions(root string) map[string]string {
 // missing from cur (sources filtered by --only, failed, or simply
 // unchanged-and-untouched) are still on disk and are not reported; the only
 // deletions are the pruned files, listed by path.
-func reportChanges(prev, cur map[string]string, prunedFiles []string, full bool) {
+// underAny reports whether the slash path loc lies in one of the top-level
+// dirs.
+func underAny(loc string, dirs []string) bool {
+	top, _, _ := strings.Cut(loc, "/")
+	return slices.Contains(dirs, top)
+}
+
+// Packages gone from the tree count as removed after a --full build (the
+// tree is rebuilt from the sources) and under the release dirs an
+// incremental build pruned; elsewhere an incremental build leaves them.
+func reportChanges(prev, cur map[string]string, prunedFiles, prunedDirs []string, full bool) {
 	type change struct{ loc, pkg, from, to string }
 
 	var added, removed, upgraded, downgraded []change
@@ -473,12 +484,10 @@ func reportChanges(prev, cur map[string]string, prunedFiles []string, full bool)
 		}
 	}
 
-	if full {
-		for k, ov := range prev {
-			if _, ok := cur[k]; !ok {
-				loc, pkg := split(k)
-				removed = append(removed, change{loc, pkg, ov, ""})
-			}
+	for k, ov := range prev {
+		loc, pkg := split(k)
+		if _, ok := cur[k]; !ok && (full || underAny(loc, prunedDirs)) {
+			removed = append(removed, change{loc, pkg, ov, ""})
 		}
 	}
 
@@ -971,6 +980,10 @@ func verifyLeaves(ctx context.Context, cfg *Config, root string, leaves []string
 	for _, leaf := range leaves {
 		rel, _ := filepath.Rel(root, leaf)
 		rel = filepath.ToSlash(rel)
+
+		if _, serr := os.Stat(filepath.Join(leaf, jsonIndexName)); serr != nil {
+			problemf("%s: no %s (asu / owut read it); run build --reindex", rel, jsonIndexName)
+		}
 
 		var err error
 

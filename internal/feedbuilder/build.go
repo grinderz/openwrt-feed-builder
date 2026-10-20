@@ -48,6 +48,7 @@ type buildRun struct {
 	feedArches  map[string]map[string]bool // rel feed dir -> real arches shipped there
 	newVersions map[string]string          // "<dir>|<pkg>" -> version (what we shipped)
 	prunedFiles []string
+	prunedDirs  []string // top-level release dirs dropped from the layout
 
 	skipped, routed, unchanged, superseded, pruned int
 }
@@ -172,7 +173,7 @@ func Build(ctx context.Context, cfg *Config, opts BuildOptions) error {
 	// help below must still describe the whole tree, so fold in the feed dirs
 	// that were already there (from the pre-build index snapshot).
 	if !opts.Full {
-		relPaths = withSnapshotDirs(relPaths, oldVersions)
+		relPaths = withSnapshotDirs(relPaths, oldVersions, run.prunedDirs)
 	}
 
 	// 5. Write repo.pub / repo-apk.pem + per-release add.sh helpers, wired to
@@ -191,7 +192,7 @@ func Build(ctx context.Context, cfg *Config, opts BuildOptions) error {
 		swapped = true
 	}
 
-	reportChanges(oldVersions, run.newVersions, run.prunedFiles, opts.Full)
+	reportChanges(oldVersions, run.newVersions, run.prunedFiles, run.prunedDirs, opts.Full)
 
 	// 7. Drop cache entries this run did not use (old versions' downloads and
 	//    repacks, dropped sources). Only a run that visited every source
@@ -532,6 +533,30 @@ func (b *buildRun) prune() {
 			}
 		}
 	}
+
+	b.pruneReleases()
+}
+
+// pruneReleases removes the release dirs the layout dropped (a release
+// bumped in layout.version leaves its <release>/ dir behind, with the kmods
+// and target packages of a kernel nobody runs any more), and the
+// packages-<branch>/ dir of a branch without releases. A --full build starts
+// from an empty tree, so there is nothing to prune there.
+func (b *buildRun) pruneReleases() {
+	if b.opts.Full {
+		return
+	}
+
+	for _, name := range b.cfg.Layout.staleTopDirs(b.buildDir) {
+		if err := os.RemoveAll(filepath.Join(b.buildDir, name)); err != nil {
+			problemf("cannot prune stale release dir %s: %v", name, err)
+			continue
+		}
+
+		b.prunedDirs = append(b.prunedDirs, name)
+
+		fmt.Println(Dim(fmt.Sprintf("  - pruned %s/ (not in layout.version)", name)))
+	}
 }
 
 // supersededFile reports whether a package file in dir is an older version
@@ -723,12 +748,14 @@ func (b *buildRun) helpers(relPaths []string, signed bool, fingerprint string) e
 	return nil
 }
 
-// withSnapshotDirs adds the feed dirs of the pre-build snapshot to relPaths.
-func withSnapshotDirs(relPaths []string, oldVersions map[string]string) []string {
+// withSnapshotDirs adds the feed dirs of the pre-build snapshot to relPaths,
+// minus those under the release dirs this build pruned: the helpers and the
+// router help would otherwise still name a release that is gone.
+func withSnapshotDirs(relPaths []string, oldVersions map[string]string, prunedDirs []string) []string {
 	relSet := toSet(relPaths)
 
 	for key := range oldVersions {
-		if rel, _, ok := strings.CutLast(key, "|"); ok && !relSet[rel] {
+		if rel, _, ok := strings.CutLast(key, "|"); ok && !relSet[rel] && !underAny(rel, prunedDirs) {
 			relSet[rel] = true
 			relPaths = append(relPaths, rel)
 		}

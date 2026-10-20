@@ -94,10 +94,12 @@ exit otherwise (fits a pre-`publish` hook).
 `build` is incremental by default: it merges into the existing output tree and
 skips packages whose bytes are already in place (no copy / re-index / re-sign).
 When a package ships a newer version, its older `.ipk` files in the same dir
-are pruned and the index rebuilt; packages no longer produced by any source
-stay until a `--full` build rebuilds the tree from scratch (staged +
-atomically swapped). Cached downloads are validated against the metadata the source exposes
-and re-fetched on mismatch. `--only` limits the run to matching sources;
+are pruned and the index rebuilt; a release dropped from `layout.version`
+loses its `<release>/` dir (and `packages-<branch>/` once the branch has no
+release left); packages no longer produced by any source stay until a
+`--full` build rebuilds the tree from scratch (staged + atomically swapped).
+Cached downloads are validated against the metadata the source exposes and
+re-fetched on mismatch. `--only` limits the run to matching sources;
 combined with the incremental default the rest of the feed stays as-is.
 `--reindex` regenerates the index of every feed dir, not just the touched
 ones — use after an index-format change.
@@ -352,7 +354,7 @@ internal/feedbuilder/              # all logic (package feedbuilder)
 | `sdk.go`         | type sdk: build from source (buildroot)|
 | `download.go`    | retrying HTTP client + on-disk cache   |
 | `ipk.go`         | ar/tar parsing of .ipk + control       |
-| `index.go`       | Packages/Packages.gz + usign signing   |
+| `index.go`       | Packages/Packages.gz + index.json + usign signing |
 | `apk.go`         | ADB (.apk / packages.adb) reader + apk-tools wrappers |
 | `layout.go`      | output dir layout + target detection   |
 | `version.go`     | Debian/opkg version comparison         |
@@ -362,6 +364,13 @@ internal/feedbuilder/              # all logic (package feedbuilder)
 
 ## Notes
 
+- Every feed dir carries an `index.json` next to its `Packages` /
+  `packages.adb`, in the shape of the official feeds (`{"version": 2,
+  "architecture": …, "packages": {name: version}}`): what an ASU server and
+  owut read package versions from, so a self-hosted ASU can mirror this feed's
+  indexes without parsing `Packages` (or `packages.adb`, which it cannot).
+  A tree built before this existed gets them with `build --reindex`; `verify`
+  warns about a dir without one.
 - `usign` (signing / `genkey`) and apk-tools v3 (apk index, signing, verify,
   `binary` .apk packaging) are shelled out; the apk key is generated natively.
 - The GitHub API calls of the `github` / `github_dir` / `binary` sources are

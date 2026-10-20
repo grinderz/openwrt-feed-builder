@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"hash"
@@ -252,11 +253,86 @@ func leafFormat(dir string) string {
 	return formatIPK
 }
 
-// writeIndex writes the feed index into dir and returns the package count:
+// writeIndex writes the feed indexes into dir and returns the package count:
 // Packages and Packages.gz for an opkg dir (with a non-empty indexScript the
 // text comes from ipkg-make-index.sh instead of the native generator), an
-// unsigned packages.adb from apk mkndx for an apk dir.
+// unsigned packages.adb from apk mkndx for an apk dir, and next to either
+// the index.json the ASU server and owut read.
 func writeIndex(ctx context.Context, dir, indexScript string, apk apkTool) (int, error) {
+	count, err := writeFormatIndex(ctx, dir, indexScript, apk)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := writeJSONIndex(dir); err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+// jsonIndex is the shape of index.json, as the official feeds carry it
+// (version 2): the architecture of the dir and its packages by name.
+type jsonIndex struct {
+	Version      int               `json:"version"`
+	Architecture string            `json:"architecture"`
+	Packages     map[string]string `json:"packages"`
+}
+
+const jsonIndexVersion = 2
+
+// writeJSONIndex writes dir's index.json from the feed index just written.
+// The architecture is the native one of the packages (a dir holds one, plus
+// "all"), else the <arch> of a packages-<branch>/<arch>/<feed> path, else
+// "all". The file is left alone when nothing changed, so publish does not
+// send it after every build.
+func writeJSONIndex(dir string) error {
+	stanzas, err := readIndexFile(filepath.Join(dir, indexFileName(leafFormat(dir))))
+	if err != nil {
+		return err
+	}
+
+	index := jsonIndex{
+		Version:      jsonIndexVersion,
+		Architecture: pathArch(dir),
+		Packages:     make(map[string]string, len(stanzas)),
+	}
+
+	for _, fields := range stanzas {
+		name := fields["Package"]
+		if name == "" {
+			continue
+		}
+
+		index.Packages[name] = fields["Version"]
+
+		if arch := fields["Architecture"]; arch != "" && arch != archAll && arch != archNoarch {
+			index.Architecture = arch
+		}
+	}
+
+	data, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		return fmt.Errorf("index.json: %w", err)
+	}
+
+	return writeFileIfChanged(filepath.Join(dir, jsonIndexName), append(data, '\n'), filePerm)
+}
+
+// pathArch is the <arch> of a packages-<branch>/<arch>/<feed> dir, "all"
+// for a dir outside that layout (the target dirs).
+func pathArch(dir string) string {
+	archDir := filepath.Dir(dir)
+	if strings.HasPrefix(filepath.Base(filepath.Dir(archDir)), "packages-") {
+		return filepath.Base(archDir)
+	}
+
+	return archAll
+}
+
+// writeFormatIndex writes the index of dir's package format and returns the
+// package count.
+func writeFormatIndex(ctx context.Context, dir, indexScript string, apk apkTool) (int, error) {
 	if leafFormat(dir) == formatAPK {
 		return apk.mkndx(ctx, dir)
 	}
