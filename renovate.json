@@ -7,6 +7,12 @@
   "extends": [
     "config:recommended"
   ],
+  "timezone": "Europe/Istanbul",
+  "schedule": [
+    "before 9am on saturday"
+  ],
+  "dependencyDashboard": true,
+  "prConcurrentLimit": 5,
   "semanticCommitType": "chore",
   "baseBranchPatterns": [
     "main"
