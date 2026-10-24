@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
-    "Renovate on GitHub keeps every version here: the go.mod requires, the actions of the workflow, the pre-commit hook revs and the tool versions of the Makefile.",
+    "Renovate on GitHub keeps every version here: the go.mod requires, the actions of the workflow, the pre-commit hook revs, the tool versions of the Makefile and the shellcheck release of the CI lint job.",
     "The go directive moves by hand; test.docker takes its golang image tag from it."
   ],
   "extends": [
@@ -95,6 +95,19 @@
       "depNameTemplate": "alpine",
       "datasourceTemplate": "docker",
       "versioningTemplate": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "shellcheck release installed by the CI lint job",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/ci\\.yml$/"
+      ],
+      "matchStrings": [
+        "SHELLCHECK_VERSION: (?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "koalaman/shellcheck",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
     }
   ]
 }
