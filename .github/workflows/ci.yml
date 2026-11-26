@@ -44,6 +44,13 @@ jobs:
       - name: gitattributes
         run: make lint.gitattributes
 
+      # hook envs (node + renovate for the config validator, the actionlint
+      # build) take minutes to install; they only change with the config
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
       - name: pre-commit
         run: make lint.pre-commit
 

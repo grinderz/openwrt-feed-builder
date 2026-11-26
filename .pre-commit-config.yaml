@@ -40,3 +40,5 @@ repos:
     rev: 44.181.5
     hooks:
       - id: renovate-config-validator
+        # --strict: a config that needs migration fails too
+        args: ['--strict']

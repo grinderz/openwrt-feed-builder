@@ -5,7 +5,8 @@
     "The go directive moves by hand; test.docker takes its golang image tag from it."
   ],
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    ":semanticCommitTypeAll(chore)"
   ],
   "timezone": "Europe/Istanbul",
   "schedule": [
@@ -13,7 +14,6 @@
   ],
   "dependencyDashboard": true,
   "prConcurrentLimit": 5,
-  "semanticCommitType": "chore",
   "baseBranchPatterns": [
     "main"
   ],
@@ -35,13 +35,6 @@
     "gomodUpdateImportPaths"
   ],
   "packageRules": [
-    {
-      "description": "chore for every update: config:recommended prefixes runtime deps with fix otherwise",
-      "matchPackageNames": [
-        "*"
-      ],
-      "semanticCommitType": "chore"
-    },
     {
       "description": "the go and toolchain directives are bumped by hand",
       "matchDepTypes": [
