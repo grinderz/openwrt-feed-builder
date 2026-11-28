@@ -10,10 +10,10 @@
   ],
   "timezone": "Europe/Istanbul",
   "schedule": [
-    "before 9am on saturday"
+    "every weekend"
   ],
-  "dependencyDashboard": true,
   "prConcurrentLimit": 5,
+  "semanticCommits": "enabled",
   "baseBranchPatterns": [
     "main"
   ],
@@ -36,10 +36,16 @@
   ],
   "packageRules": [
     {
-      "description": "the go and toolchain directives are bumped by hand",
-      "matchDepTypes": [
-        "golang",
-        "toolchain"
+      "description": "pre-commit hooks in their own PR",
+      "matchManagers": [
+        "pre-commit"
+      ],
+      "groupName": "pre-commit hooks"
+    },
+    {
+      "description": "Go moves by hand: the go and toolchain directives of go.mod and the go-version of setup-go",
+      "matchDepNames": [
+        "go"
       ],
       "enabled": false
     }
