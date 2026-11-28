@@ -37,7 +37,7 @@ repos:
 
   # a broken renovate.json silently stops the PRs
   - repo: https://github.com/renovatebot/pre-commit-hooks
-    rev: 44.181.5
+    rev: 45.3.2
     hooks:
       - id: renovate-config-validator
         # --strict: a config that needs migration fails too
